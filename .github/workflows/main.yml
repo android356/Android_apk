@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build & Package APK
 
 on:
   push:
@@ -28,37 +28,74 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
+      - name: Configure Android SDK
+        run: |
+          echo "=== Configuring Android SDK ==="
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses 2>/dev/null || true
+          fi
 
-      - name: Grant execute permission for gradlew
+      - name: Ensure Gradle wrapper is executable
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace || echo "Release build completed with notes"
-
-      - name: Locate APK files
-        id: apk-finder
+      - name: Print Diagnostic Environment Information
         run: |
-          echo "Listing generated APKs:"
-          find app/build/outputs/apk/ -type f -name "*.apk"
-          DEBUG_APK=$(find app/build/outputs/apk/debug/ -type f -name "*.apk" | head -n 1)
-          echo "debug_apk=$DEBUG_APK" >> "$GITHUB_OUTPUT"
+          echo "=== Java Version ==="
+          java -version
+          echo "=== Gradle Wrapper Version ==="
+          ./gradlew --version
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Build Failure Diagnostics
+        if: failure()
+        run: |
+          echo "=== BUILD FAILED: Diagnostics ==="
+          echo "=== Working Directory Listing ==="
+          ls -la
+          echo "=== App Directory Listing ==="
+          ls -la app/ 2>/dev/null || true
+          echo "=== Build Reports & Logs ==="
+          find app/build/ -type f -name "*.txt" -o -name "*.html" -o -name "*.log" 2>/dev/null || true
+
+      - name: Locate Generated APK
+        id: locate-apk
+        if: success()
+        run: |
+          echo "=== Searching for generated APKs ==="
+          APK_FILES=$(find app/build/outputs/apk/ -type f -name "*.apk" 2>/dev/null || true)
+          echo "Discovered APK files:"
+          echo "$APK_FILES"
+          
+          DEBUG_APK=$(find app/build/outputs/apk/debug/ -type f -name "*.apk" 2>/dev/null | head -n 1 || true)
+          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
+            echo "apk_path=$DEBUG_APK" >> "$GITHUB_OUTPUT"
+            echo "apk_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Target APK selected: $DEBUG_APK"
+          elif [ -n "$APK_FILES" ]; then
+            FIRST_APK=$(echo "$APK_FILES" | head -n 1)
+            echo "apk_path=$FIRST_APK" >> "$GITHUB_OUTPUT"
+            echo "apk_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Target APK selected: $FIRST_APK"
+          else
+            echo "apk_exists=false" >> "$GITHUB_OUTPUT"
+            echo "No APK found!"
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
+        if: success() && steps.locate-apk.outputs.apk_exists == 'true'
         with:
           name: AndroidAutoDeploy-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.locate-apk.outputs.apk_path }}
           retention-days: 30
 
       - name: Upload All Output APKs
         uses: actions/upload-artifact@v4
+        if: success() && steps.locate-apk.outputs.apk_exists == 'true'
         with:
           name: AndroidAutoDeploy-All-APKs
           path: app/build/outputs/apk/**/*.apk
