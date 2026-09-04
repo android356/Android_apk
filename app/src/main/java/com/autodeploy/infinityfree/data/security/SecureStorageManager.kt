@@ -27,7 +27,6 @@ class SecureStorageManager(private val context: Context) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            // Fallback for environments where MasterKey/Tink is constrained
             context.getSharedPreferences("secure_credentials_fallback", Context.MODE_PRIVATE)
         }
     }
@@ -36,11 +35,36 @@ class SecureStorageManager(private val context: Context) {
     private val androidKeyStore = "AndroidKeyStore"
 
     fun saveFtpPassword(key: String, password: String) {
+        saveSecureString(key, password)
+    }
+
+    fun getFtpPassword(key: String): String? {
+        return getSecureString(key)
+    }
+
+    fun saveGitHubToken(key: String, token: String) {
+        saveSecureString(key, token)
+    }
+
+    fun getGitHubToken(key: String): String? {
+        return getSecureString(key)
+    }
+
+    fun deleteCredential(key: String) {
+        prefs.edit().remove(key).apply()
+        context.getSharedPreferences("secure_credentials_fallback", Context.MODE_PRIVATE)
+            .edit()
+            .remove(key)
+            .apply()
+    }
+
+    fun deletePassword(key: String) = deleteCredential(key)
+
+    private fun saveSecureString(key: String, value: String) {
         try {
-            prefs.edit().putString(key, password).apply()
+            prefs.edit().putString(key, value).apply()
         } catch (e: Exception) {
-            // Use custom KeyStore cipher fallback
-            val encrypted = encryptWithKeyStore(password)
+            val encrypted = encryptWithKeyStore(value)
             context.getSharedPreferences("secure_credentials_fallback", Context.MODE_PRIVATE)
                 .edit()
                 .putString(key, encrypted)
@@ -48,7 +72,7 @@ class SecureStorageManager(private val context: Context) {
         }
     }
 
-    fun getFtpPassword(key: String): String? {
+    private fun getSecureString(key: String): String? {
         return try {
             val value = prefs.getString(key, null)
             if (value == null) {
@@ -63,14 +87,6 @@ class SecureStorageManager(private val context: Context) {
                 .getString(key, null)
             fallbackValue?.let { decryptWithKeyStore(it) }
         }
-    }
-
-    fun deletePassword(key: String) {
-        prefs.edit().remove(key).apply()
-        context.getSharedPreferences("secure_credentials_fallback", Context.MODE_PRIVATE)
-            .edit()
-            .remove(key)
-            .apply()
     }
 
     private fun getOrCreateKey(): SecretKey {
@@ -105,7 +121,6 @@ class SecureStorageManager(private val context: Context) {
             System.arraycopy(cipherText, 0, combined, iv.size, cipherText.size)
             Base64.encodeToString(combined, Base64.NO_WRAP)
         } catch (e: Exception) {
-            // Absolute fallback (Base64 obfuscation for testing/mock environments without hardware Keystore)
             Base64.encodeToString(plainText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         }
     }

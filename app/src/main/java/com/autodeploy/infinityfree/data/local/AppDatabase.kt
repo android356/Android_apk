@@ -10,17 +10,19 @@ import com.autodeploy.infinityfree.data.local.entity.*
 @Database(
     entities = [
         ProjectEntity::class,
+        GitHubConnectionEntity::class,
         HostingConnectionEntity::class,
         FileMetadataEntity::class,
         SyncQueueEntity::class,
         TemporaryBackupEntity::class,
         SyncHistoryEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun projectDao(): ProjectDao
+    abstract fun githubConnectionDao(): GitHubConnectionDao
     abstract fun hostingConnectionDao(): HostingConnectionDao
     abstract fun fileMetadataDao(): FileMetadataDao
     abstract fun syncQueueDao(): SyncQueueDao

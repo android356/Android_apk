@@ -3,9 +3,9 @@ package com.autodeploy.infinityfree.service
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.autodeploy.infinityfree.data.ignore.IgnoreRuleMatcher
 import com.autodeploy.infinityfree.data.local.AppDatabase
 import com.autodeploy.infinityfree.data.local.entity.FileMetadataEntity
-import com.autodeploy.infinityfree.data.local.entity.SyncHistoryEntity
 import com.autodeploy.infinityfree.data.local.entity.SyncQueueEntity
 import com.autodeploy.infinityfree.data.preferences.AppPreferences
 import com.autodeploy.infinityfree.data.saf.SafFileItem
@@ -27,7 +27,6 @@ class ReconciliationScanner(
 
     private val fileMetadataDao = database.fileMetadataDao()
     private val syncQueueDao = database.syncQueueDao()
-    private val historyDao = database.syncHistoryDao()
 
     suspend fun performScan(
         projectId: Long,
@@ -44,6 +43,9 @@ class ReconciliationScanner(
             return@withContext 0
         }
 
+        val customPatterns = preferences.customIgnorePatterns.first()
+        val ignoreMatcher = IgnoreRuleMatcher(customPatterns)
+
         val debounceSeconds = preferences.debounceDurationSeconds.first()
         val debounceMillis = debounceSeconds * 1000L
         val syncDeletions = preferences.syncDeletions.first()
@@ -53,10 +55,13 @@ class ReconciliationScanner(
 
         var changesCount = 0
 
-        // Process Scanned Items
         for (item in scannedItems) {
+            // Apply Ignore Rules (.gitignore and custom patterns)
+            if (ignoreMatcher.isIgnored(item.relativePath)) {
+                continue
+            }
+
             if (item.isDirectory) {
-                // Record directory metadata
                 fileMetadataDao.insertOrUpdate(
                     FileMetadataEntity(
                         projectId = projectId,
@@ -74,7 +79,7 @@ class ReconciliationScanner(
             val existing = existingRecords[item.relativePath]
 
             if (existing == null) {
-                // Brand new file
+                // New file
                 stabilityTracker.recordObservation(item.relativePath, item.size, item.lastModified)
                 val isStable = forceAllAsPending || stabilityTracker.isStable(item.relativePath, debounceMillis)
 
@@ -96,7 +101,7 @@ class ReconciliationScanner(
                     )
                 }
             } else {
-                // Existing file comparison by relative path, size, lastModified (PRD Section 8)
+                // Modified file comparison
                 val sizeChanged = existing.fileSize != item.size
                 val modifiedChanged = item.lastModified > existing.lastModified
 
@@ -119,7 +124,6 @@ class ReconciliationScanner(
                         )
                     }
                 } else {
-                    // Unchanged file - ensure marked present
                     if (!existing.isPresent) {
                         fileMetadataDao.insertOrUpdate(existing.copy(isPresent = true))
                     }
@@ -127,13 +131,15 @@ class ReconciliationScanner(
             }
         }
 
-        // Detect Deletions (PRD Section 15)
+        // Deletions
         for ((path, record) in existingRecords) {
             if (record.itemType == "FILE" && record.isPresent && !scannedPaths.contains(path)) {
-                fileMetadataDao.insertOrUpdate(record.copy(isPresent = false, syncStatus = "DELETED"))
-                if (syncDeletions) {
-                    enqueueDelete(projectId, path)
-                    changesCount++
+                if (!ignoreMatcher.isIgnored(path)) {
+                    fileMetadataDao.insertOrUpdate(record.copy(isPresent = false, syncStatus = "DELETED"))
+                    if (syncDeletions) {
+                        enqueueDelete(projectId, path)
+                        changesCount++
+                    }
                 }
             }
         }
@@ -144,7 +150,6 @@ class ReconciliationScanner(
     }
 
     private suspend fun enqueueUpload(projectId: Long, item: SafFileItem, syncStatus: String) {
-        // Avoid duplicate queue entries (PRD Section 14)
         val activeQueueItem = syncQueueDao.getActiveItemByPath(projectId, item.relativePath)
         if (activeQueueItem == null) {
             syncQueueDao.insertItem(
@@ -157,7 +162,6 @@ class ReconciliationScanner(
                 )
             )
         } else {
-            // Update existing pending state to ensure it gets processed
             syncQueueDao.updateItem(
                 activeQueueItem.copy(
                     status = "PENDING",

@@ -29,10 +29,18 @@ data class FileMetadataEntity(
     val lastModified: Long = 0L,
     @ColumnInfo(name = "last_synced_at")
     val lastSyncedAt: Long? = null,
+    @ColumnInfo(name = "github_last_synced_at")
+    val githubLastSyncedAt: Long? = null,
+    @ColumnInfo(name = "infinityfree_last_synced_at")
+    val infinityFreeLastSyncedAt: Long? = null,
+    @ColumnInfo(name = "github_sha")
+    val githubSha: String? = null,
+    @ColumnInfo(name = "content_hash")
+    val contentHash: String? = null,
     @ColumnInfo(name = "sync_status")
-    val syncStatus: String = "NOT_SYNCED", // NOT_SYNCED, SYNCED, PENDING, FAILED, MODIFIED
+    val syncStatus: String = "NOT_SYNCED", // NOT_SYNCED, SYNCED, PENDING, FAILED, MODIFIED, CONFLICT
     @ColumnInfo(name = "optional_hash")
-    val optionalHash: String? = null,
+    val optionalHash: String? = null, // URI reference
     @ColumnInfo(name = "is_present")
     val isPresent: Boolean = true
 )

@@ -11,7 +11,8 @@ data class SyncSettingsUiState(
     val debounceSeconds: Int = 3,
     val reconciliationIntervalSeconds: Int = 30,
     val syncDeletions: Boolean = false,
-    val backupRetentionMinutes: Int = 60
+    val backupRetentionMinutes: Int = 60,
+    val ignorePatternsText: String = ""
 )
 
 class SyncSettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -27,13 +28,15 @@ class SyncSettingsViewModel(application: Application) : AndroidViewModel(applica
                 prefs.debounceDurationSeconds,
                 prefs.reconciliationIntervalSeconds,
                 prefs.syncDeletions,
-                prefs.backupRetentionMinutes
-            ) { debounce, interval, deletions, retention ->
+                prefs.backupRetentionMinutes,
+                prefs.customIgnorePatterns
+            ) { debounce, interval, deletions, retention, ignores ->
                 SyncSettingsUiState(
                     debounceSeconds = debounce,
                     reconciliationIntervalSeconds = interval,
                     syncDeletions = deletions,
-                    backupRetentionMinutes = retention
+                    backupRetentionMinutes = retention,
+                    ignorePatternsText = ignores.joinToString("\n")
                 )
             }.collect { newState ->
                 _uiState.value = newState
@@ -55,5 +58,14 @@ class SyncSettingsViewModel(application: Application) : AndroidViewModel(applica
 
     fun setBackupRetentionMinutes(minutes: Int) {
         viewModelScope.launch { prefs.setBackupRetentionMinutes(minutes) }
+    }
+
+    fun onIgnorePatternsTextChange(text: String) {
+        _uiState.update { it.copy(ignorePatternsText = text) }
+    }
+
+    fun saveIgnorePatterns() {
+        val lines = _uiState.value.ignorePatternsText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        viewModelScope.launch { prefs.setCustomIgnorePatterns(lines) }
     }
 }

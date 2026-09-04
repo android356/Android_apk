@@ -6,7 +6,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,7 +59,7 @@ fun SyncSettingsScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "Waits for rapid AI file edits to settle before uploading. Default: 3-5 seconds.",
+                        "Waits for rapid AI file writes to settle before uploading. Default: 3-5 seconds.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
@@ -91,7 +91,7 @@ fun SyncSettingsScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "Recursive background diff scan interval while Auto Sync is active. Default: 30 seconds.",
+                        "Interval for scanning and detecting any missed changes. Default: 30 seconds.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
@@ -124,12 +124,12 @@ fun SyncSettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Sync Deletions to Server",
+                            "Sync Deletions to Server & GitHub",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "When enabled, removing a local file will automatically delete the corresponding remote file on InfinityFree.",
+                            "When enabled, removing a local file will delete the remote file from both GitHub and InfinityFree.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
@@ -151,12 +151,12 @@ fun SyncSettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Temporary Backup Retention",
+                        "Temporary Old-Version Backup Retention",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "Preserves previous file version in local temporary cache before replacement. Expired backups are auto-purged.",
+                        "Preserves old version locally before replacing modified files. Expired backups are cleaned up automatically.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
@@ -171,6 +171,45 @@ fun SyncSettingsScreen(
                         valueRange = 15f..180f,
                         steps = 10
                     )
+                }
+            }
+
+            // Custom Ignore Rules (.gitignore style)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Ignore Rules (.gitignore Style)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Enter glob patterns to ignore from synchronization, one per line (e.g. *.log, temp/**, test/*). Default ignores like .git, node_modules, and .idea are always applied.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    OutlinedTextField(
+                        value = state.ignorePatternsText,
+                        onValueChange = { viewModel.onIgnorePatternsTextChange(it) },
+                        label = { Text("Custom Ignore Patterns") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(110.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    Button(
+                        onClick = { viewModel.saveIgnorePatterns() },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                    ) {
+                        Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save Ignore Rules")
+                    }
                 }
             }
         }

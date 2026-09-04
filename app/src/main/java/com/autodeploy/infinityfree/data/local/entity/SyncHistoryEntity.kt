@@ -27,7 +27,11 @@ data class SyncHistoryEntity(
     @ColumnInfo(name = "completed_at")
     val completedAt: Long = System.currentTimeMillis(),
     @ColumnInfo(name = "result")
-    val result: String, // SUCCESS, FAILED, SKIPPED
+    val result: String, // SUCCESS, FAILED, SKIPPED, CONFLICT
+    @ColumnInfo(name = "github_result")
+    val githubResult: String? = null,
+    @ColumnInfo(name = "infinityfree_result")
+    val infinityFreeResult: String? = null,
     @ColumnInfo(name = "error_message")
     val errorMessage: String? = null
 )

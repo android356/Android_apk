@@ -1,6 +1,5 @@
 package com.autodeploy.infinityfree.ui.dashboard
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -21,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autodeploy.infinityfree.data.preferences.SyncControlState
 import com.autodeploy.infinityfree.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -30,7 +30,9 @@ import java.util.*
 fun DashboardScreen(
     viewModel: DashboardViewModel,
     onNavigateToFolderPicker: () -> Unit,
+    onNavigateToGitHub: () -> Unit,
     onNavigateToHostingSetup: () -> Unit,
+    onNavigateToMapping: () -> Unit,
     onNavigateToSyncSettings: () -> Unit,
     onNavigateToActivityLog: () -> Unit,
     onNavigateToQueueManager: () -> Unit,
@@ -47,6 +49,10 @@ fun DashboardScreen(
         }
     }
 
+    val isEmergencyStopped = state.syncControlState == SyncControlState.EMERGENCY_STOPPED
+    val isPaused = state.syncControlState == SyncControlState.PAUSED
+    val isActive = state.syncControlState == SyncControlState.ACTIVE
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -55,7 +61,7 @@ fun DashboardScreen(
                         Icon(
                             imageVector = Icons.Default.CloudSync,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = PrimaryBlue,
                             modifier = Modifier.size(28.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -67,28 +73,36 @@ fun DashboardScreen(
                     }
                 },
                 actions = {
-                    // Quick Auto Sync Switch
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(end = 12.dp)
                     ) {
                         Text(
-                            if (state.isAutoSyncOn) "AUTO" else "MANUAL",
+                            when (state.syncControlState) {
+                                SyncControlState.ACTIVE -> "AUTO ON"
+                                SyncControlState.PAUSED -> "PAUSED"
+                                SyncControlState.EMERGENCY_STOPPED -> "STOPPED"
+                                else -> "AUTO OFF"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = if (state.isAutoSyncOn) SuccessGreen else TextSecondary
+                            color = when (state.syncControlState) {
+                                SyncControlState.ACTIVE -> SuccessGreen
+                                SyncControlState.PAUSED -> WarningAmber
+                                SyncControlState.EMERGENCY_STOPPED -> ErrorRed
+                                else -> TextSecondary
+                            }
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Switch(
-                            checked = state.isAutoSyncOn,
+                            checked = isActive,
                             onCheckedChange = { viewModel.toggleAutoSync(it) },
+                            enabled = !isEmergencyStopped,
                             modifier = Modifier.height(28.dp)
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -102,59 +116,156 @@ fun DashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Activity Status Banner
-            ActivityBanner(activity = state.currentActivity, isAutoSyncOn = state.isAutoSyncOn)
+            // Emergency Alert Banner if Emergency Stopped
+            if (isEmergencyStopped) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = ErrorBg)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("EMERGENCY STOP ACTIVE", fontWeight = FontWeight.Bold, color = ErrorRed)
+                            Text("All synchronization is forcefully halted. Resume below when safe.", style = MaterialTheme.typography.bodySmall, color = ErrorRed)
+                        }
+                        Button(
+                            onClick = { viewModel.resumeSync() },
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("Resume", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
 
-            // Project Selection Card
+            // Current Activity Status Banner
+            ActivityBanner(activity = state.currentActivity, controlState = state.syncControlState)
+
+            // Local Project Card
             ProjectInfoCard(
                 projectName = state.projectName,
                 folderUri = state.projectFolderUri,
                 onChangeFolder = onNavigateToFolderPicker
             )
 
-            // Hosting Connection Card
-            HostingInfoCard(
-                server = state.hostingServer,
-                connectionName = state.hostingConnectionName,
-                status = state.hostingStatus,
-                isConfigured = state.isHostingConfigured,
-                onConfigure = onNavigateToHostingSetup
+            // Destination Connections Overview (Dual Card)
+            DualConnectionCards(
+                isGitHubConfigured = state.isGitHubConfigured,
+                gitHubRepo = if (state.isGitHubConfigured) "${state.gitHubOwner}/${state.gitHubRepo}:${state.gitHubBranch}" else null,
+                gitHubPath = state.gitHubPath,
+                onConfigureGitHub = onNavigateToGitHub,
+
+                isHostingConfigured = state.isHostingConfigured,
+                hostingName = state.hostingConnectionName,
+                hostingServer = state.hostingServer,
+                onConfigureHosting = onNavigateToHostingSetup,
+
+                onViewMapping = onNavigateToMapping
             )
 
-            // Prominent "SYNC NOW" Button (PRD Section 12)
-            Button(
-                onClick = { viewModel.triggerSyncNow() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
+            // Sync Execution Controls (Start, Pause, Resume, Emergency Stop, Sync Now)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PrimaryBlue
-                ),
-                enabled = !state.isSyncingNow && state.projectName != null && state.isHostingConfigured
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
             ) {
-                if (state.isSyncingNow) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        color = Color.White,
-                        strokeWidth = 2.5.dp
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("SYNCHRONIZING...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                } else {
-                    Icon(imageVector = Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(24.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("SYNC NOW", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Sync Controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+
+                    // Primary Prominent SYNC NOW Button
+                    Button(
+                        onClick = { viewModel.triggerSyncNow() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        enabled = !state.isSyncingNow && !isEmergencyStopped && state.projectName != null
+                    ) {
+                        if (state.isSyncingNow) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("SYNCHRONIZING...", fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(imageVector = Icons.Default.Sync, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("SYNC NOW", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+                    }
+
+                    // Secondary Action Buttons Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isActive) {
+                            OutlinedButton(
+                                onClick = { viewModel.pauseSync() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pause", fontSize = 12.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.stopSync() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Stop", fontSize = 12.sp)
+                            }
+                        } else if (isPaused) {
+                            Button(
+                                onClick = { viewModel.resumeSync() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = WarningAmber)
+                            ) {
+                                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Resume", fontSize = 12.sp)
+                            }
+                        } else {
+                            Button(
+                                onClick = { viewModel.startSync() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen)
+                            ) {
+                                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Start Sync", fontSize = 12.sp)
+                            }
+                        }
+
+                        // Prominent EMERGENCY STOP Button
+                        Button(
+                            onClick = { viewModel.emergencyStop() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                        ) {
+                            Icon(imageVector = Icons.Default.FrontHand, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("EMERGENCY STOP", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 
-            // Sync Metrics Grid
-            Text(
-                "Project & Sync Overview",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
-            )
+            // Metrics Grid
+            Text("Sync Metrics & Status", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard(
@@ -169,30 +280,31 @@ fun DashboardScreen(
                     value = "${state.pendingQueueCount}",
                     icon = Icons.Default.PendingActions,
                     tint = if (state.pendingQueueCount > 0) WarningAmber else TextSecondary,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { onNavigateToQueueManager() }
+                    modifier = Modifier.weight(1f).clickable { onNavigateToQueueManager() }
                 )
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard(
-                    title = "Failed Uploads",
+                    title = "Failed Items",
                     value = "${state.failedQueueCount}",
                     icon = Icons.Default.ErrorOutline,
                     tint = if (state.failedQueueCount > 0) ErrorRed else SuccessGreen,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { onNavigateToQueueManager() }
+                    modifier = Modifier.weight(1f).clickable { onNavigateToQueueManager() }
+                )
+                MetricCard(
+                    title = "Conflicts",
+                    value = "${state.conflictCount}",
+                    icon = Icons.Default.Rule,
+                    tint = if (state.conflictCount > 0) WarningAmber else TextSecondary,
+                    modifier = Modifier.weight(1f).clickable { onNavigateToQueueManager() }
                 )
                 MetricCard(
                     title = "Backups (1hr)",
                     value = "${state.activeBackupCount}",
                     icon = Icons.Default.History,
                     tint = AccentTeal,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { onNavigateToBackups() }
+                    modifier = Modifier.weight(1f).clickable { onNavigateToBackups() }
                 )
             }
 
@@ -204,44 +316,64 @@ fun DashboardScreen(
                 border = CardDefaults.outlinedCardBorder()
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TimestampRow(label = "Last Scan:", timestamp = state.lastScanTime)
+                    TimestampRow("Last Scan:", state.lastScanTime)
                     Divider(color = BorderColor, thickness = 0.5.dp)
-                    TimestampRow(label = "Last Successful Sync:", timestamp = state.lastSuccessfulSyncTime)
+                    TimestampRow("Last Successful Sync:", state.lastSuccessfulSyncTime)
+                    Divider(color = BorderColor, thickness = 0.5.dp)
+                    TimestampRow("Last GitHub Sync:", state.lastGitHubSyncTime)
+                    Divider(color = BorderColor, thickness = 0.5.dp)
+                    TimestampRow("Last InfinityFree Sync:", state.lastInfinityFreeSyncTime)
                 }
             }
 
-            // Management Navigation Actions
-            Text(
-                "Management & Configuration",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
+            // Navigation Options
+            Text("Configuration & Management", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+
+            NavigationButton(
+                title = "Deployment Mapping",
+                subtitle = "Configure source-to-destination paths for GitHub & InfinityFree",
+                icon = Icons.Default.AltRoute,
+                onClick = onNavigateToMapping
+            )
+
+            NavigationButton(
+                title = "GitHub Connection",
+                subtitle = "Manage personal access token, branch, and repo mapping",
+                icon = Icons.Default.Code,
+                onClick = onNavigateToGitHub
+            )
+
+            NavigationButton(
+                title = "InfinityFree Hosting",
+                subtitle = "Manage FTP server, credentials, and remote root directory",
+                icon = Icons.Default.CloudUpload,
+                onClick = onNavigateToHostingSetup
             )
 
             NavigationButton(
                 title = "Activity Log",
-                subtitle = "View real-time synchronization history and debug logs",
+                subtitle = "Real-time log of GitHub commits, FTP uploads, and backups",
                 icon = Icons.Default.ListAlt,
                 onClick = onNavigateToActivityLog
             )
 
             NavigationButton(
-                title = "Failed Uploads & Queue",
-                subtitle = "Inspect, retry, or cancel queued items (${state.failedQueueCount} failed)",
+                title = "Sync Queue & Conflicts",
+                subtitle = "Review pending queue (${state.pendingQueueCount}), failed (${state.failedQueueCount}), and conflicts (${state.conflictCount})",
                 icon = Icons.Default.Queue,
                 onClick = onNavigateToQueueManager
             )
 
             NavigationButton(
                 title = "Temporary Backups & Rollback",
-                subtitle = "Restore recent versions within the 1-hour window (${state.activeBackupCount} available)",
+                subtitle = "Restore 1-hour version backups (${state.activeBackupCount} available)",
                 icon = Icons.Default.Restore,
                 onClick = onNavigateToBackups
             )
 
             NavigationButton(
-                title = "Sync Settings",
-                subtitle = "Debounce delay, scan interval (30s), deletion sync",
+                title = "Sync Settings & Ignore Rules",
+                subtitle = "Debounce delay, scan interval (30s), deletion sync, .gitignore rules",
                 icon = Icons.Default.Tune,
                 onClick = onNavigateToSyncSettings
             )
@@ -250,29 +382,35 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun ActivityBanner(activity: String, isAutoSyncOn: Boolean) {
-    val isIdle = activity.equals("Idle", ignoreCase = true)
+private fun ActivityBanner(activity: String, controlState: SyncControlState) {
+    val isEmergency = controlState == SyncControlState.EMERGENCY_STOPPED
+    val isPaused = controlState == SyncControlState.PAUSED
     val isError = activity.startsWith("Error", ignoreCase = true)
+    val isIdle = activity.equals("Idle", ignoreCase = true)
 
     val bgColor = when {
-        isError -> ErrorBg
+        isEmergency || isError -> ErrorBg
+        isPaused -> WarningBg
         !isIdle -> PrimaryBlue.copy(alpha = 0.12f)
-        isAutoSyncOn -> SuccessBg
+        controlState == SyncControlState.ACTIVE -> SuccessBg
         else -> SurfaceCard
     }
 
     val iconColor = when {
-        isError -> ErrorRed
+        isEmergency || isError -> ErrorRed
+        isPaused -> WarningAmber
         !isIdle -> PrimaryBlue
-        isAutoSyncOn -> SuccessGreen
+        controlState == SyncControlState.ACTIVE -> SuccessGreen
         else -> TextSecondary
     }
 
     val icon = when {
+        isEmergency -> Icons.Default.FrontHand
         isError -> Icons.Default.Error
+        isPaused -> Icons.Default.PauseCircle
         !isIdle -> Icons.Default.Sync
-        isAutoSyncOn -> Icons.Default.CheckCircle
-        else -> Icons.Default.PauseCircle
+        controlState == SyncControlState.ACTIVE -> Icons.Default.CheckCircle
+        else -> Icons.Default.StopCircle
     }
 
     Card(
@@ -280,42 +418,35 @@ private fun ActivityBanner(activity: String, isAutoSyncOn: Boolean) {
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = bgColor)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
+                modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(imageVector = icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column {
-                Text(
-                    text = "Current Activity",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
-                Text(
-                    text = activity,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
-                )
+                Text("Current Status", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                Text(activity, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             }
         }
     }
 }
 
 @Composable
-private fun ProjectInfoCard(
-    projectName: String?,
-    folderUri: String?,
-    onChangeFolder: () -> Unit
+private fun DualConnectionCards(
+    isGitHubConfigured: Boolean,
+    gitHubRepo: String?,
+    gitHubPath: String?,
+    onConfigureGitHub: () -> Unit,
+
+    isHostingConfigured: Boolean,
+    hostingName: String?,
+    hostingServer: String?,
+    onConfigureHosting: () -> Unit,
+
+    onViewMapping: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -323,19 +454,91 @@ private fun ProjectInfoCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = CardDefaults.outlinedCardBorder()
     ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Dual Target Destinations", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                TextButton(onClick = onViewMapping) {
+                    Text("View Mapping", fontSize = 12.sp)
+                }
+            }
+
+            // GitHub Row
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(AccentTeal.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(imageVector = Icons.Default.Code, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(18.dp))
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("GitHub Repository", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    Text(
+                        gitHubRepo ?: "Not Configured",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isGitHubConfigured) TextPrimary else WarningAmber
+                    )
+                }
+                OutlinedButton(
+                    onClick = onConfigureGitHub,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                ) {
+                    Text(if (isGitHubConfigured) "Edit" else "Setup", fontSize = 11.sp)
+                }
+            }
+
+            Divider(color = BorderColor, thickness = 0.5.dp)
+
+            // InfinityFree Row
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(PrimaryBlue.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(imageVector = Icons.Default.CloudUpload, contentDescription = null, tint = PrimaryBlue, modifier = Modifier.size(18.dp))
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("InfinityFree Hosting", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    Text(
+                        hostingServer ?: "Not Configured",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isHostingConfigured) TextPrimary else WarningAmber
+                    )
+                }
+                OutlinedButton(
+                    onClick = onConfigureHosting,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                ) {
+                    Text(if (isHostingConfigured) "Edit" else "Setup", fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectInfoCard(projectName: String?, folderUri: String?, onChangeFolder: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Selected Local Project",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
+                Text("Selected Local Project", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                 Text(
                     projectName ?: "No Project Selected",
                     style = MaterialTheme.typography.titleMedium,
@@ -343,13 +546,7 @@ private fun ProjectInfoCard(
                     color = if (projectName != null) TextPrimary else ErrorRed
                 )
                 if (folderUri != null) {
-                    Text(
-                        folderUri,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(folderUri, style = MaterialTheme.typography.bodySmall, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
@@ -365,89 +562,24 @@ private fun ProjectInfoCard(
 }
 
 @Composable
-private fun HostingInfoCard(
-    server: String?,
-    connectionName: String?,
-    status: String,
-    isConfigured: Boolean,
-    onConfigure: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = CardDefaults.outlinedCardBorder()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "InfinityFree Hosting Connection",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
-                Text(
-                    connectionName ?: "Hosting Not Configured",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isConfigured) TextPrimary else WarningAmber
-                )
-                Text(
-                    server ?: "Enter FTP credentials to connect",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(
-                onClick = onConfigure,
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(if (isConfigured) "Edit" else "Configure", fontSize = 12.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetricCard(
-    title: String,
-    value: String,
-    icon: ImageVector,
-    tint: Color,
-    modifier: Modifier = Modifier
-) {
+private fun MetricCard(title: String, value: String, icon: ImageVector, tint: Color, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = CardDefaults.outlinedCardBorder()
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(tint.copy(alpha = 0.12f)),
+                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+                Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             Column {
-                Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(text = title, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(text = title, style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontSize = 10.sp)
             }
         }
     }
@@ -467,35 +599,22 @@ private fun TimestampRow(label: String, timestamp: Long) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
-        Text(dateString, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = TextPrimary)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        Text(dateString, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, color = TextPrimary)
     }
 }
 
 @Composable
-private fun NavigationButton(
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    onClick: () -> Unit
-) {
+private fun NavigationButton(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = CardDefaults.outlinedCardBorder()
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(PrimaryBlue.copy(alpha = 0.1f)),
+                modifier = Modifier.size(38.dp).clip(RoundedCornerShape(8.dp)).background(PrimaryBlue.copy(alpha = 0.1f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(imageVector = icon, contentDescription = null, tint = PrimaryBlue, modifier = Modifier.size(22.dp))

@@ -29,6 +29,7 @@ fun QueueManagerScreen(
     var selectedTab by remember { mutableStateOf(0) }
     val queueItems by viewModel.queueItems.collectAsState()
     val failedItems by viewModel.failedItems.collectAsState()
+    val conflictedItems by viewModel.conflictedItems.collectAsState()
 
     Scaffold(
         topBar = {
@@ -56,12 +57,17 @@ fun QueueManagerScreen(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Active & Pending (${queueItems.size})") }
+                    text = { Text("Active (${queueItems.size})", fontSize = 12.sp) }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("Failed Items (${failedItems.size})") }
+                    text = { Text("Failed (${failedItems.size})", fontSize = 12.sp) }
+                )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = { Text("Conflicts (${conflictedItems.size})", fontSize = 12.sp) }
                 )
             }
 
@@ -84,7 +90,11 @@ fun QueueManagerScreen(
                 }
             }
 
-            val itemsToShow = if (selectedTab == 0) queueItems else failedItems
+            val itemsToShow = when (selectedTab) {
+                0 -> queueItems
+                1 -> failedItems
+                else -> conflictedItems
+            }
 
             if (itemsToShow.isEmpty()) {
                 Box(
@@ -94,7 +104,11 @@ fun QueueManagerScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        if (selectedTab == 0) "Queue is currently empty" else "No failed items",
+                        when (selectedTab) {
+                            0 -> "Queue is currently empty"
+                            1 -> "No failed items"
+                            else -> "No conflict items detected"
+                        },
                         color = TextSecondary,
                         fontSize = 15.sp
                     )
@@ -106,7 +120,13 @@ fun QueueManagerScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(itemsToShow, key = { it.id }) { item ->
-                        QueueItemCard(item, onRetry = { viewModel.retryItem(item.id) })
+                        QueueItemCard(
+                            item = item,
+                            onRetry = { viewModel.retryItem(item.id) },
+                            onResolveConflict = { overwrite ->
+                                viewModel.resolveConflict(item.id, overwrite)
+                            }
+                        )
                     }
                 }
             }
@@ -117,11 +137,14 @@ fun QueueManagerScreen(
 @Composable
 private fun QueueItemCard(
     item: SyncQueueEntity,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onResolveConflict: (Boolean) -> Unit
 ) {
+    val isConflict = item.status == "CONFLICT"
     val statusColor = when (item.status) {
         "SUCCESS" -> SuccessGreen
         "FAILED" -> ErrorRed
+        "CONFLICT" -> WarningAmber
         "UPLOADING", "PREPARING" -> PrimaryBlue
         "RETRYING" -> WarningAmber
         else -> TextSecondary
@@ -136,62 +159,126 @@ private fun QueueItemCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = CardDefaults.outlinedCardBorder()
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "${item.operation} • ${item.status}",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = statusColor
-                    )
-                    Text(
-                        text = timeString,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
-                }
-                Spacer(modifier = Modifier.height(2.dp))
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = item.relativePath,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
+                    text = "${item.operation} • ${item.status}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = statusColor
                 )
-                if (item.retryCount > 0) {
-                    Text(
-                        text = "Retry count: ${item.retryCount}/3",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = WarningAmber
-                    )
-                }
-                if (!item.errorMessage.isNullOrEmpty()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = item.errorMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontSize = 12.sp,
-                        color = ErrorRed
-                    )
-                }
+                Text(
+                    text = timeString,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = item.relativePath,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+
+            // Dual Target Status Pills
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusPill(target = "GitHub", status = item.githubStatus)
+                StatusPill(target = "InfinityFree", status = item.infinityFreeStatus)
             }
 
-            if (item.status == "FAILED" || item.status == "RETRYING") {
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = onRetry) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Retry",
-                        tint = PrimaryBlue
-                    )
+            if (item.retryCount > 0) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Retry count: ${item.retryCount}/3",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = WarningAmber
+                )
+            }
+
+            if (!item.errorMessage.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = item.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ErrorRed
+                )
+            }
+
+            if (!item.conflictDetails.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = item.conflictDetails,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = WarningAmber
+                )
+            }
+
+            if (isConflict) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { onResolveConflict(true) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                    ) {
+                        Text("Overwrite Remote", fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { onResolveConflict(false) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text("Keep Remote", fontSize = 11.sp)
+                    }
+                }
+            } else if (item.status == "FAILED" || item.status == "RETRYING") {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    OutlinedButton(
+                        onClick = onRetry,
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Retry", fontSize = 11.sp)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusPill(target: String, status: String) {
+    val color = when (status) {
+        "SUCCESS" -> SuccessGreen
+        "FAILED" -> ErrorRed
+        "CONFLICT" -> WarningAmber
+        "SKIPPED" -> TextSecondary
+        else -> PrimaryBlue
+    }
+
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = "$target: $status",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
     }
 }

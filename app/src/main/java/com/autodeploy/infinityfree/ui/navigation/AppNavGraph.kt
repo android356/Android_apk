@@ -11,10 +11,13 @@ import com.autodeploy.infinityfree.ui.backups.BackupsViewModel
 import com.autodeploy.infinityfree.ui.dashboard.DashboardScreen
 import com.autodeploy.infinityfree.ui.dashboard.DashboardViewModel
 import com.autodeploy.infinityfree.ui.folder.FolderSelectionScreen
+import com.autodeploy.infinityfree.ui.github.GitHubConnectionScreen
+import com.autodeploy.infinityfree.ui.github.GitHubViewModel
 import com.autodeploy.infinityfree.ui.hosting.HostingConnectionScreen
 import com.autodeploy.infinityfree.ui.hosting.HostingViewModel
 import com.autodeploy.infinityfree.ui.logs.ActivityLogScreen
 import com.autodeploy.infinityfree.ui.logs.ActivityLogViewModel
+import com.autodeploy.infinityfree.ui.mapping.DeploymentMappingScreen
 import com.autodeploy.infinityfree.ui.queue.QueueManagerScreen
 import com.autodeploy.infinityfree.ui.queue.QueueViewModel
 import com.autodeploy.infinityfree.ui.settings.SyncSettingsScreen
@@ -33,7 +36,9 @@ fun AppNavGraph(
             DashboardScreen(
                 viewModel = viewModel,
                 onNavigateToFolderPicker = { navController.navigate(Screen.FolderPicker.route) },
+                onNavigateToGitHub = { navController.navigate(Screen.GitHubSetup.route) },
                 onNavigateToHostingSetup = { navController.navigate(Screen.HostingSetup.route) },
+                onNavigateToMapping = { navController.navigate(Screen.DeploymentMapping.route) },
                 onNavigateToSyncSettings = { navController.navigate(Screen.SyncSettings.route) },
                 onNavigateToActivityLog = { navController.navigate(Screen.ActivityLog.route) },
                 onNavigateToQueueManager = { navController.navigate(Screen.QueueManager.route) },
@@ -47,11 +52,28 @@ fun AppNavGraph(
             )
         }
 
+        composable(Screen.GitHubSetup.route) {
+            val viewModel: GitHubViewModel = viewModel()
+            GitHubConnectionScreen(
+                viewModel = viewModel,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Screen.HostingSetup.route) {
             val viewModel: HostingViewModel = viewModel()
             HostingConnectionScreen(
                 viewModel = viewModel,
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.DeploymentMapping.route) {
+            DeploymentMappingScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToGitHub = { navController.navigate(Screen.GitHubSetup.route) },
+                onNavigateToHosting = { navController.navigate(Screen.HostingSetup.route) },
+                onNavigateToFolder = { navController.navigate(Screen.FolderPicker.route) }
             )
         }
 

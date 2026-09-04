@@ -34,7 +34,7 @@ fun ActivityLogScreen(
     val currentFilter by viewModel.selectedFilter.collectAsState()
     val filterScrollState = rememberScrollState()
 
-    val filters = listOf("ALL", "SUCCESS", "FAILED", "UPLOAD", "DELETE", "BACKUP", "ROLLBACK")
+    val filters = listOf("ALL", "SUCCESS", "FAILED", "CONFLICT", "UPLOAD", "DELETE", "BACKUP", "ROLLBACK")
 
     Scaffold(
         topBar = {
@@ -111,6 +111,7 @@ fun ActivityLogScreen(
 @Composable
 private fun ActivityLogItem(log: SyncHistoryEntity) {
     val isSuccess = log.result.equals("SUCCESS", ignoreCase = true)
+    val isConflict = log.result.equals("CONFLICT", ignoreCase = true)
     val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val timeString = sdf.format(Date(log.startedAt))
 
@@ -128,13 +129,27 @@ private fun ActivityLogItem(log: SyncHistoryEntity) {
                 modifier = Modifier
                     .size(32.dp)
                     .clip(CircleShape)
-                    .background(if (isSuccess) SuccessBg else ErrorBg),
+                    .background(
+                        when {
+                            isSuccess -> SuccessBg
+                            isConflict -> WarningBg
+                            else -> ErrorBg
+                        }
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (isSuccess) Icons.Default.Check else Icons.Default.Close,
+                    imageVector = when {
+                        isSuccess -> Icons.Default.Check
+                        isConflict -> Icons.Default.Rule
+                        else -> Icons.Default.Close
+                    },
                     contentDescription = null,
-                    tint = if (isSuccess) SuccessGreen else ErrorRed,
+                    tint = when {
+                        isSuccess -> SuccessGreen
+                        isConflict -> WarningAmber
+                        else -> ErrorRed
+                    },
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -163,6 +178,20 @@ private fun ActivityLogItem(log: SyncHistoryEntity) {
                     fontWeight = FontWeight.SemiBold,
                     color = TextPrimary
                 )
+
+                // Dual Target Results
+                if (!log.githubResult.isNullOrEmpty() || !log.infinityFreeResult.isNullOrEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        log.githubResult?.let { gh ->
+                            Text("GitHub: $gh", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (gh.startsWith("SUCCESS")) SuccessGreen else WarningAmber)
+                        }
+                        log.infinityFreeResult?.let { ifRes ->
+                            Text("InfinityFree: $ifRes", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (ifRes.startsWith("SUCCESS")) SuccessGreen else WarningAmber)
+                        }
+                    }
+                }
+
                 if (!log.errorMessage.isNullOrEmpty()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

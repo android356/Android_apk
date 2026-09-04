@@ -2,6 +2,7 @@ package com.autodeploy.infinityfree.di
 
 import android.content.Context
 import com.autodeploy.infinityfree.data.ftp.FtpClientManager
+import com.autodeploy.infinityfree.data.github.GitHubClientManager
 import com.autodeploy.infinityfree.data.local.AppDatabase
 import com.autodeploy.infinityfree.data.preferences.AppPreferences
 import com.autodeploy.infinityfree.data.repository.AppRepository
@@ -14,6 +15,7 @@ class AppContainer(private val context: Context) {
     val preferences: AppPreferences by lazy { AppPreferences(context) }
     val secureStorage: SecureStorageManager by lazy { SecureStorageManager(context) }
     val ftpManager: FtpClientManager by lazy { FtpClientManager() }
+    val githubManager: GitHubClientManager by lazy { GitHubClientManager() }
     val safScanner: SafScanner by lazy { SafScanner(context) }
     val stabilityTracker: FileStabilityTracker by lazy { FileStabilityTracker() }
     val backupManager: BackupManager by lazy { BackupManager(context, database) }
@@ -24,7 +26,8 @@ class AppContainer(private val context: Context) {
             database = database,
             preferences = preferences,
             secureStorage = secureStorage,
-            ftpManager = ftpManager
+            ftpManager = ftpManager,
+            githubManager = githubManager
         )
     }
 
@@ -35,6 +38,7 @@ class AppContainer(private val context: Context) {
             preferences = preferences,
             secureStorage = secureStorage,
             ftpManager = ftpManager,
+            githubManager = githubManager,
             backupManager = backupManager
         )
     }

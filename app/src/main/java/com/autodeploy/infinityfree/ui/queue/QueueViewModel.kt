@@ -26,6 +26,12 @@ class QueueViewModel(application: Application) : AndroidViewModel(application) {
         .flatMapLatest { repo.observeFailedItems(it.id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val conflictedItems: StateFlow<List<SyncQueueEntity>> = repo.observeActiveProject()
+        .filterNotNull()
+        .flatMapLatest { repo.observeConflictedItems(it.id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun retryItem(id: Long) {
         viewModelScope.launch {
             repo.retryItem(id)
@@ -43,6 +49,12 @@ class QueueViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val project = repo.getActiveProject() ?: return@launch
             repo.clearCompletedQueue(project.id)
+        }
+    }
+
+    fun resolveConflict(queueId: Long, overwriteRemote: Boolean) {
+        viewModelScope.launch {
+            coordinator.resolveConflict(queueId, overwriteRemote)
         }
     }
 }
