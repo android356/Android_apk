@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Android Auto Deploy</string>
+    <string name="channel_name">Auto Sync Service</string>
+    <string name="channel_description">Monitors and synchronizes project changes to InfinityFree hosting.</string>
+</resources>
