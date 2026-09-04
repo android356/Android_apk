@@ -45,7 +45,7 @@ fun BackupsScreen(
             title = { Text("Confirm Version Rollback", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "Are you sure you want to restore the previous version of ${target.relativePath}? This will replace the remote file on InfinityFree with this backed-up version."
+                    "Are you sure you want to restore the previous version of ${target.relativePath}? This will restore the file and redeploy it to both GitHub and InfinityFree."
                 )
             },
             confirmButton = {
