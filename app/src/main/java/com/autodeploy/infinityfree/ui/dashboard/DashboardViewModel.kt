@@ -25,31 +25,53 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun observeData() {
         viewModelScope.launch {
-            combine(
-                repo.observeActiveProject(),
-                prefs.isAutoSyncEnabled,
-                prefs.syncControlState,
-                prefs.lastScanTimestamp,
-                prefs.lastSuccessfulSyncTimestamp,
-                prefs.lastGitHubSyncTimestamp,
-                prefs.lastInfinityFreeSyncTimestamp,
-                prefs.currentActivityState
-            ) { project, autoSync, controlState, lastScan, lastSync, lastGh, lastIf, activity ->
+            repo.observeActiveProject().collect { project ->
                 _uiState.update { current ->
                     current.copy(
                         projectName = project?.projectName,
-                        projectFolderUri = project?.folderUri,
-                        isAutoSyncOn = autoSync,
-                        syncControlState = controlState,
-                        lastScanTime = lastScan,
-                        lastSuccessfulSyncTime = lastSync,
-                        lastGitHubSyncTime = lastGh,
-                        lastInfinityFreeSyncTime = lastIf,
-                        currentActivity = activity
+                        projectFolderUri = project?.folderUri
                     )
                 }
-                project?.id
-            }.filterNotNull().collectLatest { projectId ->
+            }
+        }
+        viewModelScope.launch {
+            prefs.isAutoSyncEnabled.collect { autoSync ->
+                _uiState.update { it.copy(isAutoSyncOn = autoSync) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.syncControlState.collect { controlState ->
+                _uiState.update { it.copy(syncControlState = controlState) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastScanTimestamp.collect { lastScan ->
+                _uiState.update { it.copy(lastScanTime = lastScan) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastSuccessfulSyncTimestamp.collect { lastSync ->
+                _uiState.update { it.copy(lastSuccessfulSyncTime = lastSync) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastGitHubSyncTimestamp.collect { lastGh ->
+                _uiState.update { it.copy(lastGitHubSyncTime = lastGh) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastInfinityFreeSyncTimestamp.collect { lastIf ->
+                _uiState.update { it.copy(lastInfinityFreeSyncTime = lastIf) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.currentActivityState.collect { activity ->
+                _uiState.update { it.copy(currentActivity = activity) }
+            }
+        }
+
+        viewModelScope.launch {
+            repo.observeActiveProject().map { it?.id }.filterNotNull().distinctUntilChanged().collectLatest { projectId ->
                 // Observe GitHub connection
                 launch {
                     repo.observeGitHubConnection(projectId).collect { conn ->
@@ -88,6 +110,11 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
     }
+
+    fun observeConflictCount(): Flow<Int> = _uiState.map { it.conflictCount }
+    fun observeActiveBackupCount(): Flow<Int> = _uiState.map { it.activeBackupCount }
+    fun observeConflictCount(projectId: Long): Flow<Int> = repo.observeConflictCount(projectId)
+    fun observeActiveBackupCount(projectId: Long): Flow<Int> = repo.observeActiveBackupCount(projectId)
 
     fun startSync() {
         coordinator.startSync()

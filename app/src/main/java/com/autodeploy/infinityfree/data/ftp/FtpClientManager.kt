@@ -18,9 +18,10 @@ class FtpClientManager {
     suspend fun testConnection(config: FtpConnectionConfig): FtpResult<String> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            ftp.connectTimeout = config.timeoutMillis
-            ftp.defaultTimeout = config.timeoutMillis
-            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            ftp.connectTimeout = timeout
+            ftp.defaultTimeout = timeout
+            ftp.dataTimeout = timeout
 
             ftp.connect(config.server, config.port)
             val replyCode = ftp.replyCode
@@ -75,9 +76,10 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            ftp.connectTimeout = config.timeoutMillis
-            ftp.defaultTimeout = config.timeoutMillis
-            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            ftp.connectTimeout = timeout
+            ftp.defaultTimeout = timeout
+            ftp.dataTimeout = timeout
             ftp.setControlKeepAliveTimeout(Duration.ofSeconds(300))
 
             ftp.connect(config.server, config.port)
@@ -132,9 +134,10 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            ftp.connectTimeout = config.timeoutMillis
-            ftp.defaultTimeout = config.timeoutMillis
-            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            ftp.connectTimeout = timeout
+            ftp.defaultTimeout = timeout
+            ftp.dataTimeout = timeout
             ftp.connect(config.server, config.port)
             if (!ftp.login(config.username, config.password)) {
                 ftp.disconnect()

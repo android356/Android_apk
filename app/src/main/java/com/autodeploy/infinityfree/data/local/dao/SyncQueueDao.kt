@@ -33,6 +33,9 @@ interface SyncQueueDao {
     @Query("SELECT COUNT(*) FROM sync_queue WHERE project_id = :projectId AND status = 'CONFLICT'")
     fun observeConflictCount(projectId: Long): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE status = 'CONFLICT'")
+    fun observeConflictCount(): Flow<Int>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertItem(item: SyncQueueEntity): Long
 

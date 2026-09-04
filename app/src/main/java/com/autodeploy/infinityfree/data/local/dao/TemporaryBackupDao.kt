@@ -6,20 +6,23 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TemporaryBackupDao {
-    @Query("SELECT * FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE' AND expires_at > :currentTime ORDER BY created_at DESC")
-    fun observeAvailableBackups(projectId: Long, currentTime: Long = System.currentTimeMillis()): Flow<List<TemporaryBackupEntity>>
+    @Query("SELECT * FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE' ORDER BY created_at DESC")
+    fun observeAvailableBackups(projectId: Long): Flow<List<TemporaryBackupEntity>>
 
-    @Query("SELECT * FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE' AND expires_at > :currentTime ORDER BY created_at DESC")
-    suspend fun getAvailableBackups(projectId: Long, currentTime: Long = System.currentTimeMillis()): List<TemporaryBackupEntity>
+    @Query("SELECT * FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE' ORDER BY created_at DESC")
+    suspend fun getAvailableBackups(projectId: Long): List<TemporaryBackupEntity>
 
-    @Query("SELECT COUNT(*) FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE' AND expires_at > :currentTime")
-    fun observeActiveBackupCount(projectId: Long, currentTime: Long = System.currentTimeMillis()): Flow<Int>
+    @Query("SELECT COUNT(*) FROM temporary_backups WHERE project_id = :projectId AND status = 'AVAILABLE'")
+    fun observeActiveBackupCount(projectId: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM temporary_backups WHERE status = 'AVAILABLE'")
+    fun observeActiveBackupCount(): Flow<Int>
 
     @Query("SELECT * FROM temporary_backups WHERE id = :id LIMIT 1")
     suspend fun getBackupById(id: Long): TemporaryBackupEntity?
 
     @Query("SELECT * FROM temporary_backups WHERE expires_at <= :currentTime AND status = 'AVAILABLE'")
-    suspend fun getExpiredBackups(currentTime: Long = System.currentTimeMillis()): List<TemporaryBackupEntity>
+    suspend fun getExpiredBackups(currentTime: Long): List<TemporaryBackupEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBackup(backup: TemporaryBackupEntity): Long

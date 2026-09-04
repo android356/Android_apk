@@ -188,7 +188,9 @@ class AppRepository(
     fun observePendingCount(projectId: Long): Flow<Int> = syncQueueDao.observePendingCount(projectId)
     fun observeFailedCount(projectId: Long): Flow<Int> = syncQueueDao.observeFailedCount(projectId)
     fun observeConflictCount(projectId: Long): Flow<Int> = syncQueueDao.observeConflictCount(projectId)
+    fun observeConflictCount(): Flow<Int> = syncQueueDao.observeConflictCount()
     fun observeActiveBackupCount(projectId: Long): Flow<Int> = backupDao.observeActiveBackupCount(projectId)
+    fun observeActiveBackupCount(): Flow<Int> = backupDao.observeActiveBackupCount()
 
     fun observeAllQueue(projectId: Long): Flow<List<SyncQueueEntity>> = syncQueueDao.observeAllQueueItems(projectId)
     fun observeFailedItems(projectId: Long): Flow<List<SyncQueueEntity>> = syncQueueDao.observeFailedItems(projectId)

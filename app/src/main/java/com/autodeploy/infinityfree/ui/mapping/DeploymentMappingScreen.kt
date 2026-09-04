@@ -1,5 +1,6 @@
 package com.autodeploy.infinityfree.ui.mapping
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,6 +11,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -141,8 +145,8 @@ private fun MappingNodeCard(
     title: String,
     subtitle: String,
     detail: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    tint: androidx.compose.ui.graphics.Color,
+    icon: ImageVector,
+    tint: Color,
     actionLabel: String,
     onAction: () -> Unit
 ) {
@@ -159,8 +163,8 @@ private fun MappingNodeCard(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .androidx.compose.ui.draw.clip(RoundedCornerShape(8.dp))
-                    .androidx.compose.foundation.background(tint.copy(alpha = 0.12f)),
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(tint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
