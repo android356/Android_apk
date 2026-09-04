@@ -24,7 +24,7 @@ class SafScanner(private val context: Context) {
     private fun scanRecursive(
         currentDoc: DocumentFile,
         currentRelativeDir: String,
-        results: mutableListOf<SafFileItem>
+        results: MutableList<SafFileItem>
     ) {
         val children = currentDoc.listFiles()
         for (child in children) {

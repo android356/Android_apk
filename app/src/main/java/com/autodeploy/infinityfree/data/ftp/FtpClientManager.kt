@@ -7,6 +7,7 @@ import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPReply
 import java.io.InputStream
+import java.time.Duration
 
 class FtpClientManager {
 
@@ -19,7 +20,7 @@ class FtpClientManager {
         try {
             ftp.connectTimeout = config.timeoutMillis
             ftp.defaultTimeout = config.timeoutMillis
-            ftp.dataTimeout = config.timeoutMillis
+            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
 
             ftp.connect(config.server, config.port)
             val replyCode = ftp.replyCode
@@ -76,8 +77,8 @@ class FtpClientManager {
         try {
             ftp.connectTimeout = config.timeoutMillis
             ftp.defaultTimeout = config.timeoutMillis
-            ftp.dataTimeout = config.timeoutMillis
-            ftp.controlKeepAliveTimeout = 300
+            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            ftp.setControlKeepAliveTimeout(Duration.ofSeconds(300))
 
             ftp.connect(config.server, config.port)
             if (!ftp.login(config.username, config.password)) {
@@ -133,6 +134,7 @@ class FtpClientManager {
         try {
             ftp.connectTimeout = config.timeoutMillis
             ftp.defaultTimeout = config.timeoutMillis
+            ftp.dataTimeout = Duration.ofMillis(config.timeoutMillis.toLong())
             ftp.connect(config.server, config.port)
             if (!ftp.login(config.username, config.password)) {
                 ftp.disconnect()

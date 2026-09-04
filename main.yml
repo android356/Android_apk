@@ -18,12 +18,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -74,19 +74,19 @@ jobs:
           if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
             echo "apk_path=$DEBUG_APK" >> "$GITHUB_OUTPUT"
             echo "apk_exists=true" >> "$GITHUB_OUTPUT"
-            echo "Target APK selected: $DEBUG_APK"
+            echo "Target Debug APK selected: $DEBUG_APK"
           elif [ -n "$APK_FILES" ]; then
             FIRST_APK=$(echo "$APK_FILES" | head -n 1)
             echo "apk_path=$FIRST_APK" >> "$GITHUB_OUTPUT"
             echo "apk_exists=true" >> "$GITHUB_OUTPUT"
-            echo "Target APK selected: $FIRST_APK"
+            echo "Alternative APK selected: $FIRST_APK"
           else
             echo "apk_exists=false" >> "$GITHUB_OUTPUT"
             echo "No APK found!"
           fi
 
       - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success() && steps.locate-apk.outputs.apk_exists == 'true'
         with:
           name: AndroidAutoDeploy-Debug-APK
@@ -94,7 +94,7 @@ jobs:
           retention-days: 30
 
       - name: Upload All Output APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success() && steps.locate-apk.outputs.apk_exists == 'true'
         with:
           name: AndroidAutoDeploy-All-APKs
