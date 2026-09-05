@@ -18,10 +18,10 @@ class FtpClientManager {
     suspend fun testConnection(config: FtpConnectionConfig): FtpResult<String> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = config.timeoutMillis
-            ftp.connectTimeout = timeout
-            ftp.defaultTimeout = timeout
-            ftp.dataTimeout = Duration.ofMillis(timeout.toLong())
+            val timeoutMillis = config.timeoutMillis
+            ftp.connectTimeout = timeoutMillis
+            ftp.defaultTimeout = timeoutMillis
+            ftp.dataTimeout = Duration.ofMillis(timeoutMillis.toLong())
 
             ftp.connect(config.server, config.port)
             val replyCode = ftp.replyCode
@@ -76,10 +76,10 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = config.timeoutMillis
-            ftp.connectTimeout = timeout
-            ftp.defaultTimeout = timeout
-            ftp.dataTimeout = Duration.ofMillis(timeout.toLong())
+            val timeoutMillis = config.timeoutMillis
+            ftp.connectTimeout = timeoutMillis
+            ftp.defaultTimeout = timeoutMillis
+            ftp.dataTimeout = Duration.ofMillis(timeoutMillis.toLong())
             ftp.setControlKeepAliveTimeout(Duration.ofSeconds(300))
 
             ftp.connect(config.server, config.port)
@@ -134,10 +134,10 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = config.timeoutMillis
-            ftp.connectTimeout = timeout
-            ftp.defaultTimeout = timeout
-            ftp.dataTimeout = Duration.ofMillis(timeout.toLong())
+            val timeoutMillis = config.timeoutMillis
+            ftp.connectTimeout = timeoutMillis
+            ftp.defaultTimeout = timeoutMillis
+            ftp.dataTimeout = Duration.ofMillis(timeoutMillis.toLong())
             ftp.connect(config.server, config.port)
             if (!ftp.login(config.username, config.password)) {
                 ftp.disconnect()
