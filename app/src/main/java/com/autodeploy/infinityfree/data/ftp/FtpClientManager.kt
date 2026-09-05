@@ -18,7 +18,7 @@ class FtpClientManager {
     suspend fun testConnection(config: FtpConnectionConfig): FtpResult<String> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = config.timeoutMillis
             ftp.connectTimeout = timeout
             ftp.defaultTimeout = timeout
             ftp.dataTimeout = timeout
@@ -76,7 +76,7 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = config.timeoutMillis
             ftp.connectTimeout = timeout
             ftp.defaultTimeout = timeout
             ftp.dataTimeout = timeout
@@ -134,7 +134,7 @@ class FtpClientManager {
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
         val ftp = FTPClient()
         try {
-            val timeout = Duration.ofMillis(config.timeoutMillis.toLong())
+            val timeout = config.timeoutMillis
             ftp.connectTimeout = timeout
             ftp.defaultTimeout = timeout
             ftp.dataTimeout = timeout
