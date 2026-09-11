@@ -149,6 +149,20 @@ fun DashboardScreen(
             // Current Activity Status Banner
             ActivityBanner(activity = state.currentActivity, controlState = state.syncControlState)
 
+            // Real-Time File Watcher Card
+            RealTimeWatcherCard(
+                isAutoSyncOn = state.isAutoSyncOn,
+                watcherStatus = state.watcherStatus,
+                projectName = state.projectName,
+                monitoredFilesCount = state.monitoredFilesCount,
+                pendingCount = state.pendingQueueCount,
+                activeTargetName = state.activeTarget.displayName,
+                lastDetectedTime = state.lastDetectedChangeTime,
+                lastDetectedFilePath = state.lastDetectedFilePath,
+                lastDeploymentStatus = state.lastDeploymentStatus,
+                onRecoverWatcher = { viewModel.recoverWatcher() }
+            )
+
             // Local Project Card
             ProjectInfoCard(
                 projectName = state.projectName,
@@ -733,6 +747,173 @@ private fun NavigationButton(title: String, subtitle: String, icon: ImageVector,
                 Text(text = subtitle, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
             }
             Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = TextSecondary)
+        }
+    }
+}
+
+@Composable
+private fun RealTimeWatcherCard(
+    isAutoSyncOn: Boolean,
+    watcherStatus: com.autodeploy.infinityfree.service.WatcherHealthState,
+    projectName: String?,
+    monitoredFilesCount: Int,
+    pendingCount: Int,
+    activeTargetName: String,
+    lastDetectedTime: Long,
+    lastDetectedFilePath: String?,
+    lastDeploymentStatus: String,
+    onRecoverWatcher: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Visibility,
+                        contentDescription = null,
+                        tint = PrimaryBlue,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Real-Time File Watcher",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Live dot indicator
+                val (statusText, statusColor, showDot) = when {
+                    !isAutoSyncOn -> Triple("Stopped", TextSecondary, false)
+                    watcherStatus == com.autodeploy.infinityfree.service.WatcherHealthState.WATCHER_RUNNING -> Triple("Monitoring", SuccessGreen, true)
+                    watcherStatus == com.autodeploy.infinityfree.service.WatcherHealthState.WATCHER_DEGRADED -> Triple("Needs recovery", WarningAmber, true)
+                    watcherStatus == com.autodeploy.infinityfree.service.WatcherHealthState.WATCHER_RESTARTING -> Triple("Restarting", PrimaryBlue, true)
+                    else -> Triple("Stopped", TextSecondary, false)
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showDot) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(statusColor)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        statusText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = statusColor
+                    )
+                }
+            }
+
+            if (watcherStatus == com.autodeploy.infinityfree.service.WatcherHealthState.WATCHER_DEGRADED && isAutoSyncOn) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = WarningBg,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = WarningAmber, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Watcher interrupted. Tap to recover.",
+                                fontSize = 12.sp,
+                                color = WarningAmber,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Button(
+                            onClick = onRecoverWatcher,
+                            colors = ButtonDefaults.buttonColors(containerColor = WarningAmber),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text("Recover", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = BorderColor, thickness = 0.5.dp)
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Auto Sync:", fontSize = 12.sp, color = TextSecondary)
+                Text(
+                    if (isAutoSyncOn) "ON" else "OFF",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isAutoSyncOn) SuccessGreen else TextSecondary
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Project:", fontSize = 12.sp, color = TextSecondary)
+                Text(
+                    projectName ?: "None",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Files monitored:", fontSize = 12.sp, color = TextSecondary)
+                val formattedFiles = java.text.NumberFormat.getIntegerInstance().format(monitoredFilesCount)
+                Text(formattedFiles, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Pending changes:", fontSize = 12.sp, color = TextSecondary)
+                Text(
+                    "$pendingCount",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (pendingCount > 0) WarningAmber else TextSecondary
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Active target:", fontSize = 12.sp, color = TextSecondary)
+                Text(activeTargetName, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PrimaryBlue)
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Last detected change:", fontSize = 12.sp, color = TextSecondary)
+                val changeText = when {
+                    lastDetectedTime <= 0L -> "None yet"
+                    System.currentTimeMillis() - lastDetectedTime < 10_000L -> "Just now"
+                    else -> {
+                        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                        val timeStr = sdf.format(Date(lastDetectedTime))
+                        if (lastDetectedFilePath != null) "$timeStr (${lastDetectedFilePath.substringAfterLast('/')})" else timeStr
+                    }
+                }
+                Text(changeText, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Last deployment:", fontSize = 12.sp, color = TextSecondary)
+                Text(lastDeploymentStatus, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = SuccessGreen)
+            }
         }
     }
 }

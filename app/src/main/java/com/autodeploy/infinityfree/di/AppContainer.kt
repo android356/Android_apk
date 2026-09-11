@@ -99,6 +99,19 @@ class AppContainer(private val context: Context) {
         )
     }
 
+    val fileWatcher: FileWatcher by lazy { AndroidFileWatcher() }
+
+    val realTimeChangeDetector: RealTimeChangeDetector by lazy {
+        RealTimeChangeDetector(
+            context = context,
+            database = database,
+            preferences = preferences,
+            deploymentManager = deploymentManager,
+            stabilityTracker = stabilityTracker,
+            queueProcessor = queueProcessor
+        )
+    }
+
     val syncCoordinator: SyncCoordinator by lazy {
         SyncCoordinator.getInstance(
             context = context,
@@ -106,7 +119,9 @@ class AppContainer(private val context: Context) {
             scanner = reconciliationScanner,
             queueProcessor = queueProcessor,
             backupManager = backupManager,
-            preferences = preferences
+            preferences = preferences,
+            fileWatcher = fileWatcher,
+            changeDetector = realTimeChangeDetector
         )
     }
 }

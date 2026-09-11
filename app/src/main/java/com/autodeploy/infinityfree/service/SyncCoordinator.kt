@@ -10,6 +10,7 @@ import com.autodeploy.infinityfree.data.repository.AppRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -20,7 +21,9 @@ class SyncCoordinator(
     private val scanner: ReconciliationScanner,
     private val queueProcessor: SyncQueueProcessor,
     private val backupManager: BackupManager,
-    private val preferences: AppPreferences
+    private val preferences: AppPreferences,
+    private val fileWatcher: FileWatcher = AndroidFileWatcher(),
+    private val changeDetector: RealTimeChangeDetector? = null
 ) {
     companion object {
         private const val TAG = "SyncCoordinator"
@@ -33,7 +36,9 @@ class SyncCoordinator(
             scanner: ReconciliationScanner,
             queueProcessor: SyncQueueProcessor,
             backupManager: BackupManager,
-            preferences: AppPreferences
+            preferences: AppPreferences,
+            fileWatcher: FileWatcher? = null,
+            changeDetector: RealTimeChangeDetector? = null
         ): SyncCoordinator {
             return INSTANCE ?: synchronized(this) {
                 val instance = SyncCoordinator(
@@ -42,7 +47,9 @@ class SyncCoordinator(
                     scanner,
                     queueProcessor,
                     backupManager,
-                    preferences
+                    preferences,
+                    fileWatcher ?: AndroidFileWatcher(),
+                    changeDetector
                 )
                 INSTANCE = instance
                 instance
@@ -52,11 +59,56 @@ class SyncCoordinator(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val syncMutex = Mutex()
+    private val realTimeDetector: RealTimeChangeDetector = changeDetector ?: RealTimeChangeDetector(
+        context = context,
+        database = repository.projectDao.let { com.autodeploy.infinityfree.data.local.AppDatabase.getInstance(context) },
+        preferences = preferences,
+        deploymentManager = com.autodeploy.infinityfree.data.deployment.DeploymentManager(
+            infinityFreeProvider = com.autodeploy.infinityfree.data.deployment.InfinityFreeProvider(
+                com.autodeploy.infinityfree.data.local.AppDatabase.getInstance(context).hostingConnectionDao(),
+                com.autodeploy.infinityfree.data.security.SecureStorageManager(context),
+                com.autodeploy.infinityfree.data.ftp.FtpClientManager()
+            ),
+            shrotiHostProvider = com.autodeploy.infinityfree.data.deployment.ShrotiHostCPanelProvider(
+                com.autodeploy.infinityfree.data.local.AppDatabase.getInstance(context).shrotiHostConnectionDao(),
+                com.autodeploy.infinityfree.data.security.SecureStorageManager(context),
+                com.autodeploy.infinityfree.data.ftp.FtpClientManager()
+            ),
+            githubProvider = com.autodeploy.infinityfree.data.deployment.GitHubDeploymentProvider(
+                com.autodeploy.infinityfree.data.local.AppDatabase.getInstance(context).githubConnectionDao(),
+                com.autodeploy.infinityfree.data.security.SecureStorageManager(context),
+                com.autodeploy.infinityfree.data.github.GitHubClientManager()
+            ),
+            preferences = preferences,
+            syncQueueDao = com.autodeploy.infinityfree.data.local.AppDatabase.getInstance(context).syncQueueDao()
+        ),
+        stabilityTracker = FileStabilityTracker(),
+        queueProcessor = queueProcessor
+    )
+
+    // Watcher health & metrics exposed to UI
+    val watcherHealthState: StateFlow<WatcherHealthState> = fileWatcher.healthState
+    val monitoredFilesCount: StateFlow<Int> = fileWatcher.monitoredFilesCount
+    val monitoredDirectoriesCount: StateFlow<Int> = fileWatcher.monitoredDirectoriesCount
+
+    private var currentWatchedProjectId: Long? = null
+
+    init {
+        // Observe active project changes to rebind watchers
+        scope.launch {
+            repository.observeActiveProject().collect { project ->
+                if (project != null && project.id != currentWatchedProjectId) {
+                    onActiveProjectChanged(project.id)
+                }
+            }
+        }
+    }
 
     fun startSync() {
         scope.launch {
             preferences.setSyncControlState(SyncControlState.ACTIVE)
             AutoSyncForegroundService.start(context)
+            startRealTimeWatching()
             triggerManualSync()
         }
     }
@@ -64,6 +116,7 @@ class SyncCoordinator(
     fun stopSync() {
         scope.launch {
             preferences.setSyncControlState(SyncControlState.STOPPED)
+            stopRealTimeWatching()
             AutoSyncForegroundService.stop(context)
             preferences.setCurrentActivityState("Stopped")
         }
@@ -79,17 +132,89 @@ class SyncCoordinator(
     fun resumeSync() {
         scope.launch {
             preferences.setSyncControlState(SyncControlState.ACTIVE)
+            startRealTimeWatching()
             triggerManualSync()
         }
     }
 
     fun emergencyStop() {
         scope.launch {
-            // Immediate full stop
             preferences.setSyncControlState(SyncControlState.EMERGENCY_STOPPED)
+            stopRealTimeWatching()
             AutoSyncForegroundService.stop(context)
             preferences.setCurrentActivityState("EMERGENCY STOPPED")
             preferences.setSyncProgressText("Sync halted by emergency stop")
+        }
+    }
+
+    suspend fun startRealTimeWatching(): Boolean {
+        val project = repository.getActiveProject() ?: return false
+        val rootFile = StoragePathResolver.resolveToFile(context, project.folderUri)
+
+        if (rootFile == null || !rootFile.exists() || !rootFile.isDirectory) {
+            Log.e(TAG, "Cannot start real-time watcher: Folder ${project.folderUri} not accessible on filesystem")
+            return false
+        }
+
+        currentWatchedProjectId = project.id
+        realTimeDetector.setActiveProject(project.id)
+
+        val started = fileWatcher.startWatching(rootFile) { event ->
+            realTimeDetector.onFileSystemEvent(event, project, rootFile)
+        }
+
+        if (started) {
+            Log.i(TAG, "Real-time watcher active on ${rootFile.absolutePath} for project '${project.projectName}'")
+        }
+        return started
+    }
+
+    fun stopRealTimeWatching() {
+        fileWatcher.stopWatching()
+        realTimeDetector.cancelAll()
+        Log.i(TAG, "Real-time watcher stopped")
+    }
+
+    fun restartWatcher(onComplete: (Boolean) -> Unit = {}) {
+        scope.launch {
+            Log.i(TAG, "Restarting real-time watcher and running recovery reconciliation...")
+            val project = repository.getActiveProject()
+            if (project == null) {
+                onComplete(false)
+                return@launch
+            }
+
+            val rootFile = StoragePathResolver.resolveToFile(context, project.folderUri)
+            if (rootFile == null) {
+                onComplete(false)
+                return@launch
+            }
+
+            // 1. Stop old watchers
+            fileWatcher.stopWatching()
+            realTimeDetector.cancelAll()
+
+            // 2. Re-register watchers
+            val restarted = fileWatcher.startWatching(rootFile) { event ->
+                realTimeDetector.onFileSystemEvent(event, project, rootFile)
+            }
+
+            // 3. Reconcile current state to recover any missed changes during interruption
+            runReconciliationCycle()
+
+            onComplete(restarted)
+        }
+    }
+
+    private suspend fun onActiveProjectChanged(newProjectId: Long) {
+        Log.i(TAG, "Active project changed to $newProjectId. Switching watchers...")
+        stopRealTimeWatching()
+        currentWatchedProjectId = newProjectId
+
+        val controlState = preferences.syncControlState.first()
+        if (controlState == SyncControlState.ACTIVE) {
+            startRealTimeWatching()
+            runReconciliationCycle()
         }
     }
 

@@ -38,6 +38,8 @@ class AppPreferences(private val context: Context) {
         val CURRENT_ACTIVITY_STATE = stringPreferencesKey("current_activity_state")
         val SYNC_PROGRESS_TEXT = stringPreferencesKey("sync_progress_text")
         val CUSTOM_IGNORE_PATTERNS = stringPreferencesKey("custom_ignore_patterns")
+        val LAST_DETECTED_CHANGE_TIMESTAMP = longPreferencesKey("last_detected_change_timestamp")
+        val LAST_DETECTED_FILE_PATH = stringPreferencesKey("last_detected_file_path")
     }
 
     val isAutoSyncEnabled: Flow<Boolean> = context.dataStore.data
@@ -191,6 +193,28 @@ class AppPreferences(private val context: Context) {
     suspend fun setCustomIgnorePatterns(patterns: List<String>) {
         context.dataStore.edit {
             it[PreferencesKeys.CUSTOM_IGNORE_PATTERNS] = patterns.joinToString("\n")
+        }
+    }
+
+    val lastDetectedChangeTimestamp: Flow<Long> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { it[PreferencesKeys.LAST_DETECTED_CHANGE_TIMESTAMP] ?: 0L }
+
+    suspend fun setLastDetectedChangeTimestamp(timestamp: Long) {
+        context.dataStore.edit { it[PreferencesKeys.LAST_DETECTED_CHANGE_TIMESTAMP] = timestamp }
+    }
+
+    val lastDetectedFilePath: Flow<String?> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { it[PreferencesKeys.LAST_DETECTED_FILE_PATH] }
+
+    suspend fun setLastDetectedFilePath(path: String?) {
+        context.dataStore.edit {
+            if (path != null) {
+                it[PreferencesKeys.LAST_DETECTED_FILE_PATH] = path
+            } else {
+                it.remove(PreferencesKeys.LAST_DETECTED_FILE_PATH)
+            }
         }
     }
 }

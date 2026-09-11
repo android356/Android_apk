@@ -53,8 +53,27 @@ class AutoSyncForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        serviceScope.launch {
+            coordinator.startRealTimeWatching()
+        }
+        observeWatcherStatus()
         startSyncLoop()
         return START_STICKY
+    }
+
+    private fun observeWatcherStatus() {
+        serviceScope.launch {
+            coordinator.watcherHealthState.collect { health ->
+                val files = coordinator.monitoredFilesCount.value
+                val statusText = when (health) {
+                    WatcherHealthState.WATCHER_RUNNING -> "Auto Sync Active - Monitoring ($files files)"
+                    WatcherHealthState.WATCHER_DEGRADED -> "Auto Sync Active - Watcher needs recovery"
+                    WatcherHealthState.WATCHER_RESTARTING -> "Auto Sync Active - Watcher restarting..."
+                    WatcherHealthState.WATCHER_STOPPED -> "Auto Sync Active - Idle"
+                }
+                updateNotification(statusText)
+            }
+        }
     }
 
     private fun startSyncLoop() {
@@ -71,9 +90,7 @@ class AutoSyncForegroundService : Service() {
                 }
 
                 val intervalSeconds = prefs.reconciliationIntervalSeconds.first().coerceAtLeast(10)
-                updateNotification("Reconciling project files...")
                 coordinator.runReconciliationCycle()
-                updateNotification("Auto Sync Active - Idle")
 
                 delay(intervalSeconds * 1000L)
             }
@@ -131,6 +148,7 @@ class AutoSyncForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        coordinator.stopRealTimeWatching()
         serviceJob.cancel()
         super.onDestroy()
     }

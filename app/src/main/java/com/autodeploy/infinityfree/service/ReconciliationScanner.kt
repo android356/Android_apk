@@ -80,13 +80,22 @@ class ReconciliationScanner(
 
             val existing = existingRecords[item.relativePath]
 
+            // Calculate content hash for accurate verification (handles 1-char / same-size changes)
+            val currentHash = try {
+                context.contentResolver.openInputStream(item.uri)?.use {
+                    StoragePathResolver.calculateSha256(it)
+                } ?: ""
+            } catch (e: Exception) {
+                ""
+            }
+
             if (existing == null) {
                 // New file
                 stabilityTracker.recordObservation(item.relativePath, item.size, item.lastModified)
                 val isStable = forceAllAsPending || stabilityTracker.isStable(item.relativePath, debounceMillis)
 
                 if (isStable) {
-                    enqueueUpload(projectId, item, "NOT_SYNCED")
+                    enqueueUpload(projectId, item, currentHash, "NOT_SYNCED")
                     changesCount++
                 } else {
                     fileMetadataDao.insertOrUpdate(
@@ -96,6 +105,7 @@ class ReconciliationScanner(
                             itemType = "FILE",
                             fileSize = item.size,
                             lastModified = item.lastModified,
+                            contentHash = currentHash,
                             syncStatus = "PENDING",
                             optionalHash = item.uri.toString(),
                             isPresent = true
@@ -106,19 +116,21 @@ class ReconciliationScanner(
                 // Modified file comparison
                 val sizeChanged = existing.fileSize != item.size
                 val modifiedChanged = item.lastModified > existing.lastModified
+                val hashChanged = existing.contentHash == null || !existing.contentHash.equals(currentHash, ignoreCase = true)
 
-                if (forceAllAsPending || sizeChanged || modifiedChanged) {
+                if (forceAllAsPending || sizeChanged || hashChanged || modifiedChanged) {
                     stabilityTracker.recordObservation(item.relativePath, item.size, item.lastModified)
                     val isStable = forceAllAsPending || stabilityTracker.isStable(item.relativePath, debounceMillis)
 
                     if (isStable) {
-                        enqueueUpload(projectId, item, "MODIFIED")
+                        enqueueUpload(projectId, item, currentHash, "MODIFIED")
                         changesCount++
                     } else {
                         fileMetadataDao.insertOrUpdate(
                             existing.copy(
                                 fileSize = item.size,
                                 lastModified = item.lastModified,
+                                contentHash = currentHash,
                                 syncStatus = "PENDING",
                                 optionalHash = item.uri.toString(),
                                 isPresent = true
@@ -127,7 +139,7 @@ class ReconciliationScanner(
                     }
                 } else {
                     if (!existing.isPresent) {
-                        fileMetadataDao.insertOrUpdate(existing.copy(isPresent = true))
+                        fileMetadataDao.insertOrUpdate(existing.copy(isPresent = true, contentHash = currentHash))
                     }
                 }
             }
@@ -159,7 +171,7 @@ class ReconciliationScanner(
         changesCount
     }
 
-    private suspend fun enqueueUpload(projectId: Long, item: SafFileItem, syncStatus: String) {
+    private suspend fun enqueueUpload(projectId: Long, item: SafFileItem, contentHash: String, syncStatus: String) {
         val activeTarget = deploymentManager.getActiveTarget()
         val activeQueueItem = syncQueueDao.getActiveItemByPath(projectId, item.relativePath)
         if (activeQueueItem == null) {
@@ -192,6 +204,7 @@ class ReconciliationScanner(
                 itemType = "FILE",
                 fileSize = item.size,
                 lastModified = item.lastModified,
+                contentHash = contentHash,
                 syncStatus = syncStatus,
                 optionalHash = item.uri.toString(),
                 isPresent = true

@@ -48,6 +48,13 @@ data class DashboardState(
     val activeBackupCount: Int = 0,
     val snapshotCount: Int = 0,
     val stableSnapshotCount: Int = 0,
+    // Watcher & Real-Time Detection
+    val watcherStatus: com.autodeploy.infinityfree.service.WatcherHealthState = com.autodeploy.infinityfree.service.WatcherHealthState.WATCHER_STOPPED,
+    val monitoredFilesCount: Int = 0,
+    val lastDetectedChangeTime: Long = 0L,
+    val lastDetectedFilePath: String? = null,
+    val lastDeploymentStatus: String = "Success",
+
     val isSyncingNow: Boolean = false,
     val userMessage: String? = null
 )

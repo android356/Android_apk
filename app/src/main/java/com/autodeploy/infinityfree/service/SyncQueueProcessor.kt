@@ -171,9 +171,17 @@ class SyncQueueProcessor(
 
         val metadata = fileMetadataDao.getByPath(projectId, item.relativePath)
         val fileUri = Uri.parse(metadata?.optionalHash ?: "")
+        val activeProj = projectDao.getActiveProject()
+        val projectRootDir = StoragePathResolver.resolveToFile(context, activeProj?.folderUri)
+        val localDiskFile = if (projectRootDir != null) File(projectRootDir, item.relativePath) else null
 
         val fileBytes = try {
-            if (fileUri != null && fileUri.toString().isNotEmpty()) {
+            if (localDiskFile != null && localDiskFile.exists() && localDiskFile.canRead()) {
+                localDiskFile.readBytes()
+            } else if (fileUri != null && fileUri.scheme == "file") {
+                val f = File(fileUri.path ?: "")
+                if (f.exists() && f.canRead()) f.readBytes() else null
+            } else if (fileUri != null && fileUri.toString().isNotEmpty()) {
                 context.contentResolver.openInputStream(fileUri)?.use { it.readBytes() }
             } else null
         } catch (e: Exception) {

@@ -79,6 +79,26 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update { it.copy(currentActivity = activity) }
             }
         }
+        viewModelScope.launch {
+            coordinator.watcherHealthState.collect { health ->
+                _uiState.update { it.copy(watcherStatus = health) }
+            }
+        }
+        viewModelScope.launch {
+            coordinator.monitoredFilesCount.collect { count ->
+                _uiState.update { it.copy(monitoredFilesCount = count) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastDetectedChangeTimestamp.collect { ts ->
+                _uiState.update { it.copy(lastDetectedChangeTime = ts) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastDetectedFilePath.collect { path ->
+                _uiState.update { it.copy(lastDetectedFilePath = path) }
+            }
+        }
 
         viewModelScope.launch {
             repo.observeActiveProject().map { it?.id }.filterNotNull().distinctUntilChanged().collectLatest { projectId ->
@@ -187,6 +207,19 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     it.copy(
                         isSyncingNow = false,
                         userMessage = if (success) "Sync Succeeded: $message" else "Sync Failed: $message"
+                    )
+                }
+            }
+        }
+    }
+
+    fun recoverWatcher() {
+        _uiState.update { it.copy(userMessage = "Initiating Watcher Recovery & Reconciliation...") }
+        coordinator.restartWatcher { success ->
+            viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        userMessage = if (success) "Watcher successfully recovered & running" else "Watcher recovery failed"
                     )
                 }
             }
