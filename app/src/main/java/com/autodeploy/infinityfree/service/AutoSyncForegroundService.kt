@@ -87,7 +87,7 @@ class AutoSyncForegroundService : Service() {
                 "Auto Sync Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Monitors and automatically syncs local files to GitHub and InfinityFree"
+                description = "Monitors and automatically deploys local files to the active deployment target"
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)

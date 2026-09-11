@@ -124,12 +124,12 @@ fun SyncSettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Sync Deletions to Server & GitHub",
+                            "Sync Deletions to Active Target",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "When enabled, removing a local file will delete the remote file from both GitHub and InfinityFree.",
+                            "When enabled, removing a local file will delete the remote file from the currently active target. Includes safety guard against empty scans.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
@@ -142,7 +142,88 @@ fun SyncSettingsScreen(
                 }
             }
 
-            // Backup Retention Setting Card
+            // Auto-Rollback on Deployment Failure Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Auto-Rollback on Deployment Failure",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Automatically revert to the prior backup if deployment fails. Protected by infinite loop prevention.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = state.isAutoRollbackEnabled,
+                        onCheckedChange = { viewModel.setAutoRollbackEnabled(it) }
+                    )
+                }
+            }
+
+            // Versioned Snapshot Retention Count Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Versioned Snapshot Retention Count",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Maximum number of unstable snapshots to retain before pruning oldest. Snapshots marked as STABLE are never pruned.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Text(
+                        "Current Retention: ${if (state.backupRetentionCount <= 0) "Unlimited" else "${state.backupRetentionCount} versions"}",
+                        fontWeight = FontWeight.SemiBold,
+                        color = PrimaryBlue
+                    )
+                    val retentionOptions = listOf(5, 10, 20, 50, -1)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        retentionOptions.forEach { count ->
+                            val label = if (count == -1) "∞" else count.toString()
+                            val isSelected = (count == -1 && state.backupRetentionCount <= 0) || (state.backupRetentionCount == count)
+                            OutlinedButton(
+                                onClick = { viewModel.setBackupRetentionCount(count) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = if (isSelected) ButtonDefaults.outlinedButtonColors(containerColor = PrimaryBlue.copy(alpha = 0.12f)) else ButtonDefaults.outlinedButtonColors()
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Temporary Backup Retention Setting Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),

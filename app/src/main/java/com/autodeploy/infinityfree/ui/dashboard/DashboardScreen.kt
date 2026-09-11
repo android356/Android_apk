@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autodeploy.infinityfree.data.deployment.DeploymentTargetType
 import com.autodeploy.infinityfree.data.preferences.SyncControlState
 import com.autodeploy.infinityfree.ui.theme.*
 import java.text.SimpleDateFormat
@@ -155,17 +156,22 @@ fun DashboardScreen(
                 onChangeFolder = onNavigateToFolderPicker
             )
 
-            // Destination Connections Overview (Dual Card)
-            DualConnectionCards(
+            // Active Deployment Target & Connections Overview
+            DeploymentTargetsCard(
+                activeTarget = state.activeTarget,
+                onSelectActiveTarget = { viewModel.setActiveTarget(it) },
+
                 isGitHubConfigured = state.isGitHubConfigured,
                 gitHubRepo = if (state.isGitHubConfigured) "${state.gitHubOwner}/${state.gitHubRepo}:${state.gitHubBranch}" else null,
-                gitHubPath = state.gitHubPath,
                 onConfigureGitHub = onNavigateToGitHub,
 
-                isHostingConfigured = state.isHostingConfigured,
-                hostingName = state.hostingConnectionName,
-                hostingServer = state.hostingServer,
-                onConfigureHosting = onNavigateToHostingSetup,
+                isInfinityFreeConfigured = state.isHostingConfigured,
+                infinityFreeServer = state.hostingServer,
+                onConfigureInfinityFree = onNavigateToHostingSetup,
+
+                isShrotiHostConfigured = state.isShrotiHostConfigured,
+                shrotiHostServer = state.shrotiHostServer,
+                onConfigureShrotiHost = onNavigateToHostingSetup,
 
                 onViewMapping = onNavigateToMapping
             )
@@ -299,8 +305,18 @@ fun DashboardScreen(
                     tint = if (state.conflictCount > 0) WarningAmber else TextSecondary,
                     modifier = Modifier.weight(1f).clickable { onNavigateToQueueManager() }
                 )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard(
-                    title = "Backups (1hr)",
+                    title = "Snapshots",
+                    value = "${state.snapshotCount} (${state.stableSnapshotCount}★)",
+                    icon = Icons.Default.Bookmark,
+                    tint = PrimaryBlue,
+                    modifier = Modifier.weight(1f).clickable { onNavigateToBackups() }
+                )
+                MetricCard(
+                    title = "1-hr Backups",
                     value = "${state.activeBackupCount}",
                     icon = Icons.Default.History,
                     tint = AccentTeal,
@@ -320,9 +336,11 @@ fun DashboardScreen(
                     Divider(color = BorderColor, thickness = 0.5.dp)
                     TimestampRow("Last Successful Sync:", state.lastSuccessfulSyncTime)
                     Divider(color = BorderColor, thickness = 0.5.dp)
-                    TimestampRow("Last GitHub Sync:", state.lastGitHubSyncTime)
-                    Divider(color = BorderColor, thickness = 0.5.dp)
                     TimestampRow("Last InfinityFree Sync:", state.lastInfinityFreeSyncTime)
+                    Divider(color = BorderColor, thickness = 0.5.dp)
+                    TimestampRow("Last ShrotiHost Sync:", state.lastShrotiHostSyncTime)
+                    Divider(color = BorderColor, thickness = 0.5.dp)
+                    TimestampRow("Last GitHub Sync:", state.lastGitHubSyncTime)
                 }
             }
 
@@ -331,9 +349,16 @@ fun DashboardScreen(
 
             NavigationButton(
                 title = "Deployment Mapping",
-                subtitle = "Configure source-to-destination paths for GitHub & InfinityFree",
+                subtitle = "Active Target: ${state.activeTarget.displayName} destination paths",
                 icon = Icons.Default.AltRoute,
                 onClick = onNavigateToMapping
+            )
+
+            NavigationButton(
+                title = "Hosting Connections",
+                subtitle = "Manage InfinityFree and ShrotiHost cPanel credentials & directories",
+                icon = Icons.Default.CloudUpload,
+                onClick = onNavigateToHostingSetup
             )
 
             NavigationButton(
@@ -344,36 +369,29 @@ fun DashboardScreen(
             )
 
             NavigationButton(
-                title = "InfinityFree Hosting",
-                subtitle = "Manage FTP server, credentials, and remote root directory",
-                icon = Icons.Default.CloudUpload,
-                onClick = onNavigateToHostingSetup
+                title = "Versioned Snapshots & Rollback",
+                subtitle = "${state.snapshotCount} snapshots (${state.stableSnapshotCount} stable), 1-hr rollbacks, auto-restore",
+                icon = Icons.Default.Restore,
+                onClick = onNavigateToBackups
             )
 
             NavigationButton(
                 title = "Activity Log",
-                subtitle = "Real-time log of GitHub commits, FTP uploads, and backups",
+                subtitle = "Deployment results, verifications, and snapshot history",
                 icon = Icons.Default.ListAlt,
                 onClick = onNavigateToActivityLog
             )
 
             NavigationButton(
                 title = "Sync Queue & Conflicts",
-                subtitle = "Review pending queue (${state.pendingQueueCount}), failed (${state.failedQueueCount}), and conflicts (${state.conflictCount})",
+                subtitle = "Review pending queue (${state.pendingQueueCount}), failed (${state.failedQueueCount}), conflicts (${state.conflictCount})",
                 icon = Icons.Default.Queue,
                 onClick = onNavigateToQueueManager
             )
 
             NavigationButton(
-                title = "Temporary Backups & Rollback",
-                subtitle = "Restore 1-hour version backups (${state.activeBackupCount} available)",
-                icon = Icons.Default.Restore,
-                onClick = onNavigateToBackups
-            )
-
-            NavigationButton(
                 title = "Sync Settings & Ignore Rules",
-                subtitle = "Debounce delay, scan interval (30s), deletion sync, .gitignore rules",
+                subtitle = "Debounce delay, auto-rollback toggle, retention count, .gitignore",
                 icon = Icons.Default.Tune,
                 onClick = onNavigateToSyncSettings
             )
@@ -435,16 +453,21 @@ private fun ActivityBanner(activity: String, controlState: SyncControlState) {
 }
 
 @Composable
-private fun DualConnectionCards(
+private fun DeploymentTargetsCard(
+    activeTarget: DeploymentTargetType,
+    onSelectActiveTarget: (DeploymentTargetType) -> Unit,
+
     isGitHubConfigured: Boolean,
     gitHubRepo: String?,
-    gitHubPath: String?,
     onConfigureGitHub: () -> Unit,
 
-    isHostingConfigured: Boolean,
-    hostingName: String?,
-    hostingServer: String?,
-    onConfigureHosting: () -> Unit,
+    isInfinityFreeConfigured: Boolean,
+    infinityFreeServer: String?,
+    onConfigureInfinityFree: () -> Unit,
+
+    isShrotiHostConfigured: Boolean,
+    shrotiHostServer: String?,
+    onConfigureShrotiHost: () -> Unit,
 
     onViewMapping: () -> Unit
 ) {
@@ -460,67 +483,152 @@ private fun DualConnectionCards(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Dual Target Destinations", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Column {
+                    Text("Deployment Target", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Only 1 target active • Direct push only",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                }
                 TextButton(onClick = onViewMapping) {
                     Text("View Mapping", fontSize = 12.sp)
                 }
             }
 
-            // GitHub Row
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(AccentTeal.copy(alpha = 0.12f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(imageVector = Icons.Default.Code, contentDescription = null, tint = AccentTeal, modifier = Modifier.size(18.dp))
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("GitHub Repository", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                    Text(
-                        gitHubRepo ?: "Not Configured",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isGitHubConfigured) TextPrimary else WarningAmber
+            // Quick Target Selector Chips
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                DeploymentTargetType.entries.forEach { target ->
+                    val isSelected = target == activeTarget
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSelectActiveTarget(target) },
+                        label = {
+                            Text(
+                                target.displayName.substringBefore(" "),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        leadingIcon = if (isSelected) {
+                            { Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                        } else null,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-                OutlinedButton(
-                    onClick = onConfigureGitHub,
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                ) {
-                    Text(if (isGitHubConfigured) "Edit" else "Setup", fontSize = 11.sp)
                 }
             }
 
-            Divider(color = BorderColor, thickness = 0.5.dp)
+            HorizontalDivider(color = BorderColor, thickness = 0.5.dp)
 
-            // InfinityFree Row
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(PrimaryBlue.copy(alpha = 0.12f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(imageVector = Icons.Default.CloudUpload, contentDescription = null, tint = PrimaryBlue, modifier = Modifier.size(18.dp))
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("InfinityFree Hosting", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                    Text(
-                        hostingServer ?: "Not Configured",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isHostingConfigured) TextPrimary else WarningAmber
-                    )
-                }
-                OutlinedButton(
-                    onClick = onConfigureHosting,
-                    shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                ) {
-                    Text(if (isHostingConfigured) "Edit" else "Setup", fontSize = 11.sp)
+            // 1. InfinityFree Row
+            TargetRow(
+                name = "InfinityFree",
+                details = infinityFreeServer ?: "Not Configured",
+                isConfigured = isInfinityFreeConfigured,
+                isActive = activeTarget == DeploymentTargetType.INFINITY_FREE,
+                icon = Icons.Default.CloudUpload,
+                tint = PrimaryBlue,
+                onSelectActive = { onSelectActiveTarget(DeploymentTargetType.INFINITY_FREE) },
+                onConfigure = onConfigureInfinityFree
+            )
+
+            HorizontalDivider(color = BorderColor, thickness = 0.5.dp)
+
+            // 2. ShrotiHost cPanel Row
+            TargetRow(
+                name = "ShrotiHost cPanel",
+                details = shrotiHostServer ?: "Not Configured",
+                isConfigured = isShrotiHostConfigured,
+                isActive = activeTarget == DeploymentTargetType.SHROTI_HOST,
+                icon = Icons.Default.Dns,
+                tint = WarningAmber,
+                onSelectActive = { onSelectActiveTarget(DeploymentTargetType.SHROTI_HOST) },
+                onConfigure = onConfigureShrotiHost
+            )
+
+            HorizontalDivider(color = BorderColor, thickness = 0.5.dp)
+
+            // 3. GitHub Row
+            TargetRow(
+                name = "GitHub Repository",
+                details = gitHubRepo ?: "Not Configured",
+                isConfigured = isGitHubConfigured,
+                isActive = activeTarget == DeploymentTargetType.GITHUB,
+                icon = Icons.Default.Code,
+                tint = AccentTeal,
+                onSelectActive = { onSelectActiveTarget(DeploymentTargetType.GITHUB) },
+                onConfigure = onConfigureGitHub
+            )
+        }
+    }
+}
+
+@Composable
+private fun TargetRow(
+    name: String,
+    details: String,
+    isConfigured: Boolean,
+    isActive: Boolean,
+    icon: ImageVector,
+    tint: Color,
+    onSelectActive: () -> Unit,
+    onConfigure: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isActive) tint.copy(alpha = 0.08f) else Color.Transparent)
+            .padding(vertical = 4.dp, horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(tint.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(name, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                if (isActive) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(SuccessGreen, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text("ACTIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
+            Text(
+                details,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isConfigured) TextSecondary else WarningAmber,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        if (!isActive) {
+            TextButton(
+                onClick = onSelectActive,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text("Select", fontSize = 11.sp)
+            }
+        }
+        OutlinedButton(
+            onClick = onConfigure,
+            shape = RoundedCornerShape(6.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(if (isConfigured) "Edit" else "Setup", fontSize = 11.sp)
         }
     }
 }

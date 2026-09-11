@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.autodeploy.infinityfree.data.deployment.DeploymentTargetType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -30,6 +31,10 @@ class AppPreferences(private val context: Context) {
         val LAST_SUCCESSFUL_SYNC_TIMESTAMP = longPreferencesKey("last_successful_sync_timestamp")
         val LAST_GITHUB_SYNC_TIMESTAMP = longPreferencesKey("last_github_sync_timestamp")
         val LAST_INFINITYFREE_SYNC_TIMESTAMP = longPreferencesKey("last_infinityfree_sync_timestamp")
+        val ACTIVE_DEPLOYMENT_TARGET = stringPreferencesKey("active_deployment_target")
+        val LAST_SHROTIHOST_SYNC_TIMESTAMP = longPreferencesKey("last_shrotihost_sync_timestamp")
+        val AUTO_ROLLBACK_ENABLED = booleanPreferencesKey("auto_rollback_enabled")
+        val BACKUP_RETENTION_COUNT = intPreferencesKey("backup_retention_count")
         val CURRENT_ACTIVITY_STATE = stringPreferencesKey("current_activity_state")
         val SYNC_PROGRESS_TEXT = stringPreferencesKey("sync_progress_text")
         val CUSTOM_IGNORE_PATTERNS = stringPreferencesKey("custom_ignore_patterns")
@@ -139,6 +144,41 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setSyncProgressText(text: String) {
         context.dataStore.edit { it[PreferencesKeys.SYNC_PROGRESS_TEXT] = text }
+    }
+
+    val activeDeploymentTarget: Flow<DeploymentTargetType> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map {
+            val id = it[PreferencesKeys.ACTIVE_DEPLOYMENT_TARGET]
+            DeploymentTargetType.fromId(id)
+        }
+
+    suspend fun setActiveDeploymentTarget(target: DeploymentTargetType) {
+        context.dataStore.edit { it[PreferencesKeys.ACTIVE_DEPLOYMENT_TARGET] = target.id }
+    }
+
+    val lastShrotiHostSyncTimestamp: Flow<Long> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { it[PreferencesKeys.LAST_SHROTIHOST_SYNC_TIMESTAMP] ?: 0L }
+
+    suspend fun setLastShrotiHostSyncTimestamp(timestamp: Long) {
+        context.dataStore.edit { it[PreferencesKeys.LAST_SHROTIHOST_SYNC_TIMESTAMP] = timestamp }
+    }
+
+    val isAutoRollbackEnabled: Flow<Boolean> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { it[PreferencesKeys.AUTO_ROLLBACK_ENABLED] ?: false }
+
+    suspend fun setAutoRollbackEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.AUTO_ROLLBACK_ENABLED] = enabled }
+    }
+
+    val backupRetentionCount: Flow<Int> = context.dataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { it[PreferencesKeys.BACKUP_RETENTION_COUNT] ?: 10 }
+
+    suspend fun setBackupRetentionCount(count: Int) {
+        context.dataStore.edit { it[PreferencesKeys.BACKUP_RETENTION_COUNT] = count }
     }
 
     val customIgnorePatterns: Flow<List<String>> = context.dataStore.data

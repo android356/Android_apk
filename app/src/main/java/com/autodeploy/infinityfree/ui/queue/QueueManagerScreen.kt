@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.autodeploy.infinityfree.data.deployment.DeploymentTargetType
 import com.autodeploy.infinityfree.data.local.entity.SyncQueueEntity
 import com.autodeploy.infinityfree.ui.theme.*
 import java.text.SimpleDateFormat
@@ -185,11 +186,19 @@ private fun QueueItemCard(
                 color = TextPrimary
             )
 
-            // Dual Target Status Pills
+            // Target Badge and Verification Status
+            val targetType = DeploymentTargetType.fromId(item.targetProvider)
             Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatusPill(target = "GitHub", status = item.githubStatus)
-                StatusPill(target = "InfinityFree", status = item.infinityFreeStatus)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TargetBadge(targetType = targetType)
+                if (item.status == "SUCCESS") {
+                    VerificationBadge(verified = item.verified)
+                } else {
+                    StatusPill(target = targetType.shortName, status = item.status)
+                }
             }
 
             if (item.retryCount > 0) {
@@ -276,6 +285,46 @@ private fun StatusPill(target: String, status: String) {
     ) {
         Text(
             text = "$target: $status",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
+    }
+}
+
+@Composable
+private fun TargetBadge(targetType: DeploymentTargetType) {
+    val color = when (targetType) {
+        DeploymentTargetType.INFINITY_FREE -> PrimaryBlue
+        DeploymentTargetType.SHROTI_HOST -> AccentTeal
+        DeploymentTargetType.GITHUB -> Color(0xFF334155)
+    }
+
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = "Target: ${targetType.shortName}",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
+    }
+}
+
+@Composable
+private fun VerificationBadge(verified: Boolean) {
+    val color = if (verified) SuccessGreen else WarningAmber
+    val text = if (verified) "Verified ✓" else "Unverified"
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             color = color

@@ -179,17 +179,76 @@ private fun ActivityLogItem(log: SyncHistoryEntity) {
                     color = TextPrimary
                 )
 
-                // Dual Target Results
-                if (!log.githubResult.isNullOrEmpty() || !log.infinityFreeResult.isNullOrEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        log.githubResult?.let { gh ->
-                            Text("GitHub: $gh", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (gh.startsWith("SUCCESS")) SuccessGreen else WarningAmber)
-                        }
-                        log.infinityFreeResult?.let { ifRes ->
-                            Text("InfinityFree: $ifRes", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (ifRes.startsWith("SUCCESS")) SuccessGreen else WarningAmber)
+                // Target Provider, Verification, & Duration Badges
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val targetName = log.targetProvider ?: when {
+                        log.githubResult != null && log.githubResult != "SKIPPED" -> "GITHUB"
+                        log.infinityFreeResult != null && log.infinityFreeResult != "SKIPPED" -> "INFINITY_FREE"
+                        else -> null
+                    }
+                    if (targetName != null) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = PrimaryBlue.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = targetName,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PrimaryBlue,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
                         }
                     }
+                    if (log.verified == true) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = SuccessGreen.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "✓ Verified",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SuccessGreen,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (log.durationMs != null && log.durationMs > 0) {
+                        Text(
+                            text = "${log.durationMs}ms",
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                    }
+                    if (!log.errorCategory.isNullOrEmpty() && log.errorCategory != "NONE") {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = ErrorRed.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = log.errorCategory,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ErrorRed,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (!log.rollbackInfo.isNullOrEmpty()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Snapshot: ${log.rollbackInfo}",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = WarningAmber
+                    )
                 }
 
                 if (!log.errorMessage.isNullOrEmpty()) {

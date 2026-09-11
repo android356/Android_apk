@@ -15,6 +15,9 @@ interface SyncHistoryDao {
     @Query("SELECT * FROM sync_history WHERE project_id = :projectId AND operation = :operation ORDER BY started_at DESC LIMIT :limit")
     fun observeHistoryByOperation(projectId: Long, operation: String, limit: Int = 100): Flow<List<SyncHistoryEntity>>
 
+    @Query("SELECT * FROM sync_history WHERE project_id = :projectId AND target_provider = :targetProvider ORDER BY started_at DESC LIMIT :limit")
+    fun observeHistoryByTarget(projectId: Long, targetProvider: String, limit: Int = 100): Flow<List<SyncHistoryEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: SyncHistoryEntity): Long
 

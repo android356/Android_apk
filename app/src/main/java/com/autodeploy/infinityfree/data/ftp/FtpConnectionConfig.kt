@@ -6,5 +6,6 @@ data class FtpConnectionConfig(
     val username: String,
     val password: String,
     val remoteRootDirectory: String = "/htdocs/",
-    val timeoutMillis: Int = 15000
+    val timeoutMillis: Int = 15000,
+    val useFtps: Boolean = false
 )

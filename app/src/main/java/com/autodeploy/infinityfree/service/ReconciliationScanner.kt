@@ -10,6 +10,7 @@ import com.autodeploy.infinityfree.data.local.entity.SyncQueueEntity
 import com.autodeploy.infinityfree.data.preferences.AppPreferences
 import com.autodeploy.infinityfree.data.saf.SafFileItem
 import com.autodeploy.infinityfree.data.saf.SafScanner
+import com.autodeploy.infinityfree.data.deployment.DeploymentManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -19,7 +20,8 @@ class ReconciliationScanner(
     private val database: AppDatabase,
     private val preferences: AppPreferences,
     private val safScanner: SafScanner,
-    private val stabilityTracker: FileStabilityTracker
+    private val stabilityTracker: FileStabilityTracker,
+    private val deploymentManager: DeploymentManager
 ) {
     companion object {
         private const val TAG = "ReconciliationScanner"
@@ -131,17 +133,25 @@ class ReconciliationScanner(
             }
         }
 
-        // Deletions
-        for ((path, record) in existingRecords) {
-            if (record.itemType == "FILE" && record.isPresent && !scannedPaths.contains(path)) {
-                if (!ignoreMatcher.isIgnored(path)) {
-                    fileMetadataDao.insertOrUpdate(record.copy(isPresent = false, syncStatus = "DELETED"))
-                    if (syncDeletions) {
-                        enqueueDelete(projectId, path)
-                        changesCount++
+        // Deletions with Catastrophic Protection Guard
+        val fileRecordsCount = existingRecords.values.count { it.itemType == "FILE" && it.isPresent }
+        val canProcessDeletions = !(scannedItems.isEmpty() && fileRecordsCount > 0)
+
+        if (canProcessDeletions) {
+            for ((path, record) in existingRecords) {
+                if (record.itemType == "FILE" && record.isPresent && !scannedPaths.contains(path)) {
+                    if (!ignoreMatcher.isIgnored(path)) {
+                        fileMetadataDao.insertOrUpdate(record.copy(isPresent = false, syncStatus = "DELETED"))
+                        if (syncDeletions) {
+                            enqueueDelete(projectId, path)
+                            changesCount++
+                        }
                     }
                 }
             }
+        } else {
+            Log.w(TAG, "Catastrophic deletion prevented: scanned items was 0 while $fileRecordsCount files were previously tracked.")
+            onStatusUpdate("Warning: Storage scan returned 0 files. Deletions guarded and skipped.")
         }
 
         preferences.setLastScanTimestamp(System.currentTimeMillis())
@@ -150,6 +160,7 @@ class ReconciliationScanner(
     }
 
     private suspend fun enqueueUpload(projectId: Long, item: SafFileItem, syncStatus: String) {
+        val activeTarget = deploymentManager.getActiveTarget()
         val activeQueueItem = syncQueueDao.getActiveItemByPath(projectId, item.relativePath)
         if (activeQueueItem == null) {
             syncQueueDao.insertItem(
@@ -158,6 +169,8 @@ class ReconciliationScanner(
                     relativePath = item.relativePath,
                     operation = "UPLOAD",
                     status = "PENDING",
+                    target = activeTarget.name,
+                    targetProvider = activeTarget.name,
                     retryCount = 0
                 )
             )
@@ -165,6 +178,8 @@ class ReconciliationScanner(
             syncQueueDao.updateItem(
                 activeQueueItem.copy(
                     status = "PENDING",
+                    target = activeTarget.name,
+                    targetProvider = activeTarget.name,
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -186,6 +201,7 @@ class ReconciliationScanner(
     }
 
     private suspend fun enqueueDelete(projectId: Long, relativePath: String) {
+        val activeTarget = deploymentManager.getActiveTarget()
         val activeQueueItem = syncQueueDao.getActiveItemByPath(projectId, relativePath)
         if (activeQueueItem == null) {
             syncQueueDao.insertItem(
@@ -194,6 +210,8 @@ class ReconciliationScanner(
                     relativePath = relativePath,
                     operation = "DELETE_FILE",
                     status = "PENDING",
+                    target = activeTarget.name,
+                    targetProvider = activeTarget.name,
                     retryCount = 0
                 )
             )

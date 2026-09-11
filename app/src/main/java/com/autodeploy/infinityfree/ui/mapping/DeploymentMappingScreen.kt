@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autodeploy.infinityfree.AutoDeployApplication
 import com.autodeploy.infinityfree.ui.theme.*
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,15 +33,21 @@ fun DeploymentMappingScreen(
     val context = LocalContext.current
     val app = context.applicationContext as AutoDeployApplication
     val repo = app.container.repository
+    val prefs = app.container.preferences
+    val scope = rememberCoroutineScope()
 
     val activeProject by repo.observeActiveProject().collectAsState(initial = null)
+    val activeTarget by prefs.activeDeploymentTarget.collectAsState(initial = com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.INFINITY_FREE)
+
     var githubConn by remember { mutableStateOf<com.autodeploy.infinityfree.data.local.entity.GitHubConnectionEntity?>(null) }
     var hostingConn by remember { mutableStateOf<com.autodeploy.infinityfree.data.local.entity.HostingConnectionEntity?>(null) }
+    var shrotiHostConn by remember { mutableStateOf<com.autodeploy.infinityfree.data.local.entity.ShrotiHostConnectionEntity?>(null) }
 
     LaunchedEffect(activeProject?.id) {
         val pid = activeProject?.id ?: return@LaunchedEffect
         githubConn = repo.getGitHubConnection(pid)
         hostingConn = repo.getConnectionForProject(pid)
+        shrotiHostConn = repo.getShrotiHostConnection(pid)
     }
 
     val scrollState = rememberScrollState()
@@ -72,9 +79,9 @@ fun DeploymentMappingScreen(
                 border = CardDefaults.outlinedCardBorder()
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Dual Destination Architecture", fontWeight = FontWeight.Bold)
+                    Text("Single Active Target Architecture", fontWeight = FontWeight.Bold)
                     Text(
-                        "Local code created or edited by your AI coding tool is automatically synchronized to both GitHub and InfinityFree according to the mapping below.",
+                        "Only ONE destination is active at any time. When file changes are detected, they are deployed directly and exclusively to the active target.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
@@ -97,43 +104,97 @@ fun DeploymentMappingScreen(
                 Icon(imageVector = Icons.Default.ArrowDownward, contentDescription = null, tint = PrimaryBlue)
             }
 
-            // Step 2A: GitHub Target
+            // Step 2: Active Target
+            val activeTitle: String
+            val activeSubtitle: String
+            val activeDetail: String
+            val activeTint: Color
+            val activeIcon: ImageVector
+            val activeAction: () -> Unit
+
+            when (activeTarget) {
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.INFINITY_FREE -> {
+                    activeTitle = "2. Active Target: InfinityFree (FTP)"
+                    activeSubtitle = hostingConn?.connectionName ?: "Not Configured"
+                    activeDetail = if (hostingConn != null) "${hostingConn?.server} -> ${hostingConn?.remoteRootDirectory}" else "Configure FTP credentials"
+                    activeTint = PrimaryBlue
+                    activeIcon = Icons.Default.CloudUpload
+                    activeAction = onNavigateToHosting
+                }
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.SHROTI_HOST -> {
+                    activeTitle = "2. Active Target: ShrotiHost cPanel (FTPS)"
+                    activeSubtitle = shrotiHostConn?.connectionName ?: "Not Configured"
+                    activeDetail = if (shrotiHostConn != null) "${shrotiHostConn?.server} -> ${shrotiHostConn?.remoteRootDirectory}" else "Configure cPanel credentials"
+                    activeTint = WarningAmber
+                    activeIcon = Icons.Default.Dns
+                    activeAction = onNavigateToHosting
+                }
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.GITHUB -> {
+                    activeTitle = "2. Active Target: GitHub Repository"
+                    activeSubtitle = if (githubConn != null) "${githubConn?.owner}/${githubConn?.repo} [${githubConn?.branch}]" else "Not Configured"
+                    activeDetail = if (githubConn != null) "Destination: ${githubConn?.destinationPath}" else "Configure GitHub token and repo"
+                    activeTint = AccentTeal
+                    activeIcon = Icons.Default.Code
+                    activeAction = onNavigateToGitHub
+                }
+            }
+
             MappingNodeCard(
-                title = "2A. GitHub Repository Destination",
-                subtitle = if (githubConn != null) "${githubConn?.owner}/${githubConn?.repo} [${githubConn?.branch}]" else "Not Configured",
-                detail = if (githubConn != null) "Mapped to: ${githubConn?.destinationPath}" else "Configure GitHub token and repo",
-                icon = Icons.Default.Code,
-                tint = AccentTeal,
-                actionLabel = if (githubConn != null) "Edit" else "Setup",
-                onAction = onNavigateToGitHub
+                title = activeTitle,
+                subtitle = activeSubtitle,
+                detail = activeDetail,
+                icon = activeIcon,
+                tint = activeTint,
+                actionLabel = "Configure",
+                onAction = activeAction
             )
 
-            // Step 2B: InfinityFree Target
-            MappingNodeCard(
-                title = "2B. InfinityFree Live Hosting",
-                subtitle = hostingConn?.connectionName ?: "Hosting Not Configured",
-                detail = if (hostingConn != null) "${hostingConn?.server} -> ${hostingConn?.remoteRootDirectory}" else "Configure FTP credentials",
-                icon = Icons.Default.CloudUpload,
-                tint = WarningAmber,
-                actionLabel = if (hostingConn != null) "Edit" else "Setup",
-                onAction = onNavigateToHosting
-            )
+            // Relative Path Mapping Breakdown
+            val remotePathExample = when (activeTarget) {
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.INFINITY_FREE -> hostingConn?.remoteRootDirectory ?: "/htdocs/"
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.SHROTI_HOST -> shrotiHostConn?.remoteRootDirectory ?: "/public_html/"
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.GITHUB -> githubConn?.destinationPath ?: "/"
+            }
 
-            // Sample Path Mapping Breakdown
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Relative Path Preservation Example:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Relative Path Preservation Example (${activeTarget.displayName}):", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("• Local: index.html", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
-                    Text("  → GitHub: ${githubConn?.destinationPath ?: "/"}index.html", style = MaterialTheme.typography.bodySmall, color = AccentTeal)
-                    Text("  → InfinityFree: ${hostingConn?.remoteRootDirectory ?: "/htdocs/"}index.html", style = MaterialTheme.typography.bodySmall, color = WarningAmber)
+                    Text("  → Remote: ${remotePathExample.trimEnd('/')}/index.html", style = MaterialTheme.typography.bodySmall, color = activeTint)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("• Local: css/style.css", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
-                    Text("  → GitHub: ${githubConn?.destinationPath ?: "/"}css/style.css", style = MaterialTheme.typography.bodySmall, color = AccentTeal)
-                    Text("  → InfinityFree: ${hostingConn?.remoteRootDirectory ?: "/htdocs/"}css/style.css", style = MaterialTheme.typography.bodySmall, color = WarningAmber)
+                    Text("  → Remote: ${remotePathExample.trimEnd('/')}/css/style.css", style = MaterialTheme.typography.bodySmall, color = activeTint)
+                }
+            }
+
+            // Switch Active Target Section
+            Text("Switch Active Target", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                com.autodeploy.infinityfree.data.deployment.DeploymentTargetType.entries.forEach { target ->
+                    val isCurrent = target == activeTarget
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                app.container.deploymentManager.setActiveTarget(target, activeProject?.id)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = if (isCurrent) ButtonDefaults.outlinedButtonColors(containerColor = PrimaryBlue.copy(alpha = 0.1f)) else ButtonDefaults.outlinedButtonColors()
+                    ) {
+                        Text(
+                            text = if (isCurrent) "✓ ${target.displayName.substringBefore(" ")}" else target.displayName.substringBefore(" "),
+                            fontSize = 11.sp,
+                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
                 }
             }
         }

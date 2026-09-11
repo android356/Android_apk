@@ -65,6 +65,16 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
         viewModelScope.launch {
+            prefs.activeDeploymentTarget.collect { target ->
+                _uiState.update { it.copy(activeTarget = target) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.lastShrotiHostSyncTimestamp.collect { lastSh ->
+                _uiState.update { it.copy(lastShrotiHostSyncTime = lastSh) }
+            }
+        }
+        viewModelScope.launch {
             prefs.currentActivityState.collect { activity ->
                 _uiState.update { it.copy(currentActivity = activity) }
             }
@@ -87,7 +97,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                 }
-                // Observe Hosting connection
+                // Observe Hosting connection (InfinityFree)
                 launch {
                     repo.observeConnectionForProject(projectId).collect { conn ->
                         _uiState.update { current ->
@@ -100,6 +110,19 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                 }
+                // Observe ShrotiHost connection
+                launch {
+                    repo.observeShrotiHostConnection(projectId).collect { conn ->
+                        _uiState.update { current ->
+                            current.copy(
+                                shrotiHostConnectionName = conn?.connectionName,
+                                shrotiHostServer = conn?.server,
+                                isShrotiHostConfigured = conn != null,
+                                shrotiHostStatus = if (conn != null) "Configured (${conn.server})" else "Not Configured"
+                            )
+                        }
+                    }
+                }
                 // Observe counts
                 launch { repo.observeFileCount(projectId).collect { c -> _uiState.update { it.copy(totalFiles = c) } } }
                 launch { repo.observeFolderCount(projectId).collect { c -> _uiState.update { it.copy(totalFolders = c) } } }
@@ -107,7 +130,16 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 launch { repo.observeFailedCount(projectId).collect { c -> _uiState.update { it.copy(failedQueueCount = c) } } }
                 launch { repo.observeConflictCount(projectId).collect { c -> _uiState.update { it.copy(conflictCount = c) } } }
                 launch { repo.observeActiveBackupCount(projectId).collect { c -> _uiState.update { it.copy(activeBackupCount = c) } } }
+                launch { repo.observeSnapshotCount(projectId).collect { c -> _uiState.update { it.copy(snapshotCount = c) } } }
+                launch { repo.observeStableCount(projectId).collect { c -> _uiState.update { it.copy(stableSnapshotCount = c) } } }
             }
+        }
+    }
+
+    fun setActiveTarget(target: com.autodeploy.infinityfree.data.deployment.DeploymentTargetType) {
+        viewModelScope.launch {
+            prefs.setActiveDeploymentTarget(target)
+            _uiState.update { it.copy(userMessage = "Active deployment target set to: ${target.displayName}") }
         }
     }
 

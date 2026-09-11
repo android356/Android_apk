@@ -45,6 +45,12 @@ interface SyncQueueDao {
     @Query("UPDATE sync_queue SET status = :status, error_message = :errorMessage, last_attempt_at = :attemptAt WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String, errorMessage: String? = null, attemptAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE sync_queue SET status = :status, verified = :verified, error_message = :errorMessage, last_attempt_at = :attemptAt WHERE id = :id")
+    suspend fun updateStatusWithVerification(id: Long, status: String, verified: Boolean, errorMessage: String? = null, attemptAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE sync_queue SET target_provider = :newTarget WHERE project_id = :projectId AND status IN ('PENDING', 'RETRYING')")
+    suspend fun rebindPendingToTarget(projectId: Long, newTarget: String)
+
     @Query("UPDATE sync_queue SET status = 'CONFLICT', conflict_details = :details, last_attempt_at = :attemptAt WHERE id = :id")
     suspend fun markConflict(id: Long, details: String, attemptAt: Long = System.currentTimeMillis())
 

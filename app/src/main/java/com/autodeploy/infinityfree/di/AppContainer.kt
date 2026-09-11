@@ -1,6 +1,10 @@
 package com.autodeploy.infinityfree.di
 
 import android.content.Context
+import com.autodeploy.infinityfree.data.deployment.DeploymentManager
+import com.autodeploy.infinityfree.data.deployment.GitHubDeploymentProvider
+import com.autodeploy.infinityfree.data.deployment.InfinityFreeProvider
+import com.autodeploy.infinityfree.data.deployment.ShrotiHostCPanelProvider
 import com.autodeploy.infinityfree.data.ftp.FtpClientManager
 import com.autodeploy.infinityfree.data.github.GitHubClientManager
 import com.autodeploy.infinityfree.data.local.AppDatabase
@@ -18,7 +22,49 @@ class AppContainer(private val context: Context) {
     val githubManager: GitHubClientManager by lazy { GitHubClientManager() }
     val safScanner: SafScanner by lazy { SafScanner(context) }
     val stabilityTracker: FileStabilityTracker by lazy { FileStabilityTracker() }
-    val backupManager: BackupManager by lazy { BackupManager(context, database) }
+
+    val backupManager: BackupManager by lazy {
+        BackupManager(
+            context = context,
+            database = database,
+            safScanner = safScanner,
+            preferences = preferences
+        )
+    }
+
+    val infinityFreeProvider: InfinityFreeProvider by lazy {
+        InfinityFreeProvider(
+            connectionDao = database.hostingConnectionDao(),
+            secureStorage = secureStorage,
+            ftpManager = ftpManager
+        )
+    }
+
+    val shrotiHostProvider: ShrotiHostCPanelProvider by lazy {
+        ShrotiHostCPanelProvider(
+            connectionDao = database.shrotiHostConnectionDao(),
+            secureStorage = secureStorage,
+            ftpManager = ftpManager
+        )
+    }
+
+    val githubProvider: GitHubDeploymentProvider by lazy {
+        GitHubDeploymentProvider(
+            connectionDao = database.githubConnectionDao(),
+            secureStorage = secureStorage,
+            githubManager = githubManager
+        )
+    }
+
+    val deploymentManager: DeploymentManager by lazy {
+        DeploymentManager(
+            infinityFreeProvider = infinityFreeProvider,
+            shrotiHostProvider = shrotiHostProvider,
+            githubProvider = githubProvider,
+            preferences = preferences,
+            syncQueueDao = database.syncQueueDao()
+        )
+    }
 
     val repository: AppRepository by lazy {
         AppRepository(
@@ -37,8 +83,7 @@ class AppContainer(private val context: Context) {
             database = database,
             preferences = preferences,
             secureStorage = secureStorage,
-            ftpManager = ftpManager,
-            githubManager = githubManager,
+            deploymentManager = deploymentManager,
             backupManager = backupManager
         )
     }
@@ -49,7 +94,8 @@ class AppContainer(private val context: Context) {
             database = database,
             preferences = preferences,
             safScanner = safScanner,
-            stabilityTracker = stabilityTracker
+            stabilityTracker = stabilityTracker,
+            deploymentManager = deploymentManager
         )
     }
 

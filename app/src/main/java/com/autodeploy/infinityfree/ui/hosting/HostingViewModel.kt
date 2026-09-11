@@ -12,12 +12,26 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class HostingUiState(
-    val connectionName: String = "InfinityFree Hosting",
-    val server: String = "ftpupload.net",
-    val port: String = "21",
-    val username: String = "",
-    val password: String = "",
-    val remoteRoot: String = "/htdocs/",
+    val selectedTab: Int = 0, // 0 = InfinityFree, 1 = ShrotiHost cPanel
+
+    // InfinityFree fields
+    val ifConnectionName: String = "InfinityFree Hosting",
+    val ifServer: String = "ftpupload.net",
+    val ifPort: String = "21",
+    val ifUsername: String = "",
+    val ifPassword: String = "",
+    val ifRemoteRoot: String = "/htdocs/",
+
+    // ShrotiHost cPanel fields
+    val shConnectionName: String = "ShrotiHost cPanel",
+    val shServer: String = "",
+    val shPort: String = "21",
+    val shUsername: String = "",
+    val shPassword: String = "",
+    val shRemoteRoot: String = "/public_html/",
+    val shUseFtps: Boolean = true,
+
+    // Status
     val isTesting: Boolean = false,
     val testResult: String? = null,
     val isTestSuccess: Boolean = false,
@@ -33,49 +47,92 @@ class HostingViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<HostingUiState> = _uiState.asStateFlow()
 
     init {
-        loadExistingConnection()
+        loadExistingConnections()
     }
 
-    private fun loadExistingConnection() {
+    private fun loadExistingConnections() {
         viewModelScope.launch {
             val project = repo.getActiveProject() ?: return@launch
-            val conn = repo.getConnectionForProject(project.id) ?: return@launch
-            val pass = repo.getStoredPassword(conn.encryptedPasswordReference) ?: ""
 
-            _uiState.update {
-                it.copy(
-                    connectionName = conn.connectionName,
-                    server = conn.server,
-                    port = conn.port.toString(),
-                    username = conn.username,
-                    password = pass,
-                    remoteRoot = conn.remoteRootDirectory
-                )
+            // Load InfinityFree connection
+            val ifConn = repo.getConnectionForProject(project.id)
+            if (ifConn != null) {
+                val ifPass = repo.getStoredPassword(ifConn.encryptedPasswordReference) ?: ""
+                _uiState.update {
+                    it.copy(
+                        ifConnectionName = ifConn.connectionName,
+                        ifServer = ifConn.server,
+                        ifPort = ifConn.port.toString(),
+                        ifUsername = ifConn.username,
+                        ifPassword = ifPass,
+                        ifRemoteRoot = ifConn.remoteRootDirectory
+                    )
+                }
+            }
+
+            // Load ShrotiHost connection
+            val shConn = repo.getShrotiHostConnection(project.id)
+            if (shConn != null) {
+                val shPass = repo.getStoredShrotiHostPassword(shConn.encryptedPasswordReference) ?: ""
+                _uiState.update {
+                    it.copy(
+                        shConnectionName = shConn.connectionName,
+                        shServer = shConn.server,
+                        shPort = shConn.port.toString(),
+                        shUsername = shConn.username,
+                        shPassword = shPass,
+                        shRemoteRoot = shConn.remoteRootDirectory,
+                        shUseFtps = shConn.useFtps
+                    )
+                }
             }
         }
     }
 
-    fun onConnectionNameChange(name: String) = _uiState.update { it.copy(connectionName = name) }
-    fun onServerChange(server: String) = _uiState.update { it.copy(server = server) }
-    fun onPortChange(port: String) = _uiState.update { it.copy(port = port) }
-    fun onUsernameChange(username: String) = _uiState.update { it.copy(username = username) }
-    fun onPasswordChange(password: String) = _uiState.update { it.copy(password = password) }
-    fun onRemoteRootChange(remoteRoot: String) = _uiState.update { it.copy(remoteRoot = remoteRoot) }
+    fun selectTab(tabIndex: Int) = _uiState.update { it.copy(selectedTab = tabIndex, testResult = null) }
+
+    // InfinityFree handlers
+    fun onIfConnectionNameChange(name: String) = _uiState.update { it.copy(ifConnectionName = name) }
+    fun onIfServerChange(server: String) = _uiState.update { it.copy(ifServer = server) }
+    fun onIfPortChange(port: String) = _uiState.update { it.copy(ifPort = port) }
+    fun onIfUsernameChange(username: String) = _uiState.update { it.copy(ifUsername = username) }
+    fun onIfPasswordChange(password: String) = _uiState.update { it.copy(ifPassword = password) }
+    fun onIfRemoteRootChange(remoteRoot: String) = _uiState.update { it.copy(ifRemoteRoot = remoteRoot) }
+
+    // ShrotiHost handlers
+    fun onShConnectionNameChange(name: String) = _uiState.update { it.copy(shConnectionName = name) }
+    fun onShServerChange(server: String) = _uiState.update { it.copy(shServer = server) }
+    fun onShPortChange(port: String) = _uiState.update { it.copy(shPort = port) }
+    fun onShUsernameChange(username: String) = _uiState.update { it.copy(shUsername = username) }
+    fun onShPasswordChange(password: String) = _uiState.update { it.copy(shPassword = password) }
+    fun onShRemoteRootChange(remoteRoot: String) = _uiState.update { it.copy(shRemoteRoot = remoteRoot) }
+    fun onShUseFtpsChange(useFtps: Boolean) = _uiState.update { it.copy(shUseFtps = useFtps) }
 
     fun testConnection() {
         val state = _uiState.value
-        val portInt = state.port.toIntOrNull() ?: 21
-
         _uiState.update { it.copy(isTesting = true, testResult = null) }
 
         viewModelScope.launch {
-            val result = repo.testFtpConnection(
-                server = state.server,
-                port = portInt,
-                username = state.username,
-                password = state.password,
-                remoteRootDirectory = state.remoteRoot
-            )
+            val result = if (state.selectedTab == 0) {
+                val portInt = state.ifPort.toIntOrNull() ?: 21
+                repo.testFtpConnection(
+                    server = state.ifServer,
+                    port = portInt,
+                    username = state.ifUsername,
+                    password = state.ifPassword,
+                    remoteRootDirectory = state.ifRemoteRoot
+                )
+            } else {
+                val portInt = state.shPort.toIntOrNull() ?: 21
+                repo.testShrotiHostConnection(
+                    server = state.shServer,
+                    port = portInt,
+                    username = state.shUsername,
+                    password = state.shPassword,
+                    remoteRootDirectory = state.shRemoteRoot,
+                    useFtps = state.shUseFtps
+                )
+            }
 
             when (result) {
                 is FtpResult.Success -> {
@@ -102,25 +159,39 @@ class HostingViewModel(application: Application) : AndroidViewModel(application)
 
     fun saveConnection(onSaved: () -> Unit) {
         val state = _uiState.value
-        val portInt = state.port.toIntOrNull() ?: 21
-
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
             val project = repo.getActiveProject()
             val projectId = project?.id ?: repo.saveProject("Default Project", "")
 
-            repo.saveHostingConnection(
-                projectId = projectId,
-                connectionName = state.connectionName,
-                server = state.server,
-                port = portInt,
-                username = state.username,
-                password = state.password,
-                remoteRoot = state.remoteRoot
-            )
+            if (state.selectedTab == 0) {
+                val portInt = state.ifPort.toIntOrNull() ?: 21
+                repo.saveHostingConnection(
+                    projectId = projectId,
+                    connectionName = state.ifConnectionName,
+                    server = state.ifServer,
+                    port = portInt,
+                    username = state.ifUsername,
+                    password = state.ifPassword,
+                    remoteRoot = state.ifRemoteRoot
+                )
+            } else {
+                val portInt = state.shPort.toIntOrNull() ?: 21
+                repo.saveShrotiHostConnection(
+                    projectId = projectId,
+                    connectionName = state.shConnectionName,
+                    server = state.shServer,
+                    port = portInt,
+                    username = state.shUsername,
+                    password = state.shPassword,
+                    remoteRoot = state.shRemoteRoot,
+                    useFtps = state.shUseFtps
+                )
+            }
 
             _uiState.update { it.copy(isSaving = false, saveSuccess = true) }
             onSaved()
         }
     }
 }
+

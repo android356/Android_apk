@@ -115,8 +115,13 @@ class SyncCoordinator(
                 }
 
                 val folderUri = Uri.parse(project.folderUri)
-                scanner.performScan(project.id, folderUri, forceAllAsPending = false) { state ->
+                val changes = scanner.performScan(project.id, folderUri, forceAllAsPending = false) { state ->
                     scope.launch { preferences.setCurrentActivityState(state) }
+                }
+
+                if (changes > 0) {
+                    preferences.setCurrentActivityState("Creating Pre-Deployment Snapshot")
+                    backupManager.createPreDeploymentSnapshot(project.id, folderUri)
                 }
 
                 preferences.setCurrentActivityState("Processing Queue")
@@ -148,8 +153,11 @@ class SyncCoordinator(
         try {
             val project = repository.getActiveProject() ?: return
             val folderUri = Uri.parse(project.folderUri)
-            scanner.performScan(project.id, folderUri, forceAllAsPending = false) { state ->
+            val changes = scanner.performScan(project.id, folderUri, forceAllAsPending = false) { state ->
                 scope.launch { preferences.setCurrentActivityState(state) }
+            }
+            if (changes > 0) {
+                backupManager.createPreDeploymentSnapshot(project.id, folderUri)
             }
             queueProcessor.processPendingQueue { state ->
                 scope.launch { preferences.setCurrentActivityState(state) }
@@ -173,17 +181,46 @@ class SyncCoordinator(
     suspend fun rollbackBackup(backupId: Long): Boolean {
         val project = repository.getActiveProject() ?: return false
         val backup = repository.backupDao.getBackupById(backupId) ?: return false
+        val activeTarget = preferences.activeDeploymentTarget.first()
 
         repository.syncQueueDao.insertItem(
             SyncQueueEntity(
                 projectId = project.id,
                 relativePath = backup.relativePath,
                 operation = "ROLLBACK",
-                status = "PENDING"
+                status = "PENDING",
+                target = activeTarget.name,
+                targetProvider = activeTarget.name,
+                backupId = backup.id
             )
         )
         queueProcessor.processPendingQueue()
         return true
+    }
+
+    suspend fun rollbackSnapshot(snapshotId: Long): Boolean {
+        val project = repository.getActiveProject() ?: return false
+        val folderUri = Uri.parse(project.folderUri)
+        val restored = backupManager.restoreSnapshot(project.id, snapshotId, folderUri, createEmergencyBackup = true)
+        if (restored) {
+            repository.syncQueueDao.clearAllForProject(project.id)
+            scanner.performScan(project.id, folderUri, forceAllAsPending = true)
+            queueProcessor.processPendingQueue()
+        }
+        return restored
+    }
+
+    suspend fun rollbackToLastStableSnapshot(): Boolean {
+        val project = repository.getActiveProject() ?: return false
+        val stableSnapshot = repository.backupSnapshotDao.getLatestStableSnapshot(project.id) ?: return false
+        return rollbackSnapshot(stableSnapshot.id)
+    }
+
+    suspend fun createManualSnapshot(label: String = "Manual Snapshot"): Boolean {
+        val project = repository.getActiveProject() ?: return false
+        val folderUri = Uri.parse(project.folderUri)
+        val snap = backupManager.createManualSnapshot(project.id, folderUri, label)
+        return snap != null
     }
 
     suspend fun resolveConflict(queueId: Long, overwriteRemote: Boolean) {

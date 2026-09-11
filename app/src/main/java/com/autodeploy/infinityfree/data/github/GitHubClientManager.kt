@@ -79,7 +79,7 @@ class GitHubClientManager {
             val response = makeHttpRequest(url, "GET", token = token)
             if (response.statusCode in 200..299) {
                 val json = JSONObject(response.body)
-                return@withContext json.optString("sha", null)
+                return@withContext if (json.has("sha")) json.getString("sha") else null
             }
             null
         } catch (e: Exception) {

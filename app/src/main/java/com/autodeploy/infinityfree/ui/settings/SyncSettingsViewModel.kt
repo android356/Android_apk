@@ -12,6 +12,8 @@ data class SyncSettingsUiState(
     val reconciliationIntervalSeconds: Int = 30,
     val syncDeletions: Boolean = false,
     val backupRetentionMinutes: Int = 60,
+    val backupRetentionCount: Int = 10,
+    val isAutoRollbackEnabled: Boolean = false,
     val ignorePatternsText: String = ""
 )
 
@@ -25,24 +27,38 @@ class SyncSettingsViewModel(application: Application) : AndroidViewModel(applica
     init {
         viewModelScope.launch {
             combine(
-                prefs.debounceDurationSeconds,
-                prefs.reconciliationIntervalSeconds,
-                prefs.syncDeletions,
-                prefs.backupRetentionMinutes,
-                prefs.customIgnorePatterns
-            ) { debounce, interval, deletions, retention, ignores ->
+                combine(
+                    prefs.debounceDurationSeconds,
+                    prefs.reconciliationIntervalSeconds,
+                    prefs.syncDeletions
+                ) { debounce, interval, deletions ->
+                    Triple(debounce, interval, deletions)
+                },
+                combine(
+                    prefs.backupRetentionMinutes,
+                    prefs.backupRetentionCount,
+                    prefs.isAutoRollbackEnabled,
+                    prefs.customIgnorePatterns
+                ) { retention, count, autoRollback, ignores ->
+                    Tuple4(retention, count, autoRollback, ignores)
+                }
+            ) { t1, t2 ->
                 SyncSettingsUiState(
-                    debounceSeconds = debounce,
-                    reconciliationIntervalSeconds = interval,
-                    syncDeletions = deletions,
-                    backupRetentionMinutes = retention,
-                    ignorePatternsText = ignores.joinToString("\n")
+                    debounceSeconds = t1.first,
+                    reconciliationIntervalSeconds = t1.second,
+                    syncDeletions = t1.third,
+                    backupRetentionMinutes = t2.a,
+                    backupRetentionCount = t2.b,
+                    isAutoRollbackEnabled = t2.c,
+                    ignorePatternsText = t2.d.joinToString("\n")
                 )
             }.collect { newState ->
                 _uiState.value = newState
             }
         }
     }
+
+    private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
     fun setDebounceSeconds(seconds: Int) {
         viewModelScope.launch { prefs.setDebounceDurationSeconds(seconds) }
@@ -58,6 +74,14 @@ class SyncSettingsViewModel(application: Application) : AndroidViewModel(applica
 
     fun setBackupRetentionMinutes(minutes: Int) {
         viewModelScope.launch { prefs.setBackupRetentionMinutes(minutes) }
+    }
+
+    fun setBackupRetentionCount(count: Int) {
+        viewModelScope.launch { prefs.setBackupRetentionCount(count) }
+    }
+
+    fun setAutoRollbackEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAutoRollbackEnabled(enabled) }
     }
 
     fun onIgnorePatternsTextChange(text: String) {

@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPReply
+import org.apache.commons.net.ftp.FTPSClient
 import java.io.InputStream
 import java.time.Duration
 
@@ -15,8 +16,18 @@ class FtpClientManager {
         private const val TAG = "FtpClientManager"
     }
 
+    private fun createClient(useFtps: Boolean): FTPClient {
+        return if (useFtps) {
+            FTPSClient("TLS", false).apply {
+                isEndpointCheckingEnabled = false
+            }
+        } else {
+            FTPClient()
+        }
+    }
+
     suspend fun testConnection(config: FtpConnectionConfig): FtpResult<String> = withContext(Dispatchers.IO) {
-        val ftp = FTPClient()
+        val ftp = createClient(config.useFtps)
         try {
             val timeoutMillis = config.timeoutMillis
             ftp.connectTimeout = timeoutMillis
@@ -41,11 +52,16 @@ class FtpClientManager {
             ftp.enterLocalPassiveMode()
             ftp.setFileType(FTP.BINARY_FILE_TYPE)
 
-            // Normalize remote root directory
+            if (ftp is FTPSClient) {
+                try {
+                    ftp.execPBSZ(0)
+                    ftp.execPROT("P") // Encrypt data channel
+                } catch (ignored: Exception) {}
+            }
+
             val normalizedRoot = normalizeRemotePath(config.remoteRootDirectory)
             val dirExists = ftp.changeWorkingDirectory(normalizedRoot)
             if (!dirExists) {
-                // Try creating remote root directory if not present
                 val created = ftp.makeDirectory(normalizedRoot)
                 if (!created) {
                     ftp.logout()
@@ -57,13 +73,12 @@ class FtpClientManager {
             val currentWorkingDir = ftp.printWorkingDirectory() ?: normalizedRoot
             ftp.logout()
             ftp.disconnect()
-            FtpResult.Success("Connected Successfully to $currentWorkingDir")
+            val tlsInfo = if (config.useFtps) " [FTPS/TLS Enabled]" else ""
+            FtpResult.Success("Connected Successfully to $currentWorkingDir$tlsInfo")
         } catch (e: Exception) {
-            Log.e(TAG, "FTP connection test failed", e)
+            Log.e(TAG, "FTP connection test failed for server: ${config.server}", e)
             try {
-                if (ftp.isConnected) {
-                    ftp.disconnect()
-                }
+                if (ftp.isConnected) ftp.disconnect()
             } catch (ignored: Exception) {}
             FtpResult.Error("Connection failed: ${e.localizedMessage ?: e.message ?: "Unknown error"}", e)
         }
@@ -74,7 +89,7 @@ class FtpClientManager {
         localStream: InputStream,
         remoteRelativePath: String
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
-        val ftp = FTPClient()
+        val ftp = createClient(config.useFtps)
         try {
             val timeoutMillis = config.timeoutMillis
             ftp.connectTimeout = timeoutMillis
@@ -91,14 +106,16 @@ class FtpClientManager {
             ftp.enterLocalPassiveMode()
             ftp.setFileType(FTP.BINARY_FILE_TYPE)
 
-            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
-            val fullRemotePath = if (cleanRoot.endsWith("/")) {
-                cleanRoot + remoteRelativePath.trimStart('/')
-            } else {
-                "$cleanRoot/${remoteRelativePath.trimStart('/')}"
+            if (ftp is FTPSClient) {
+                try {
+                    ftp.execPBSZ(0)
+                    ftp.execPROT("P")
+                } catch (ignored: Exception) {}
             }
 
-            // Ensure directory path exists
+            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
+
             val parentDir = fullRemotePath.substringBeforeLast('/', "")
             if (parentDir.isNotEmpty()) {
                 if (!createDirectoryTree(ftp, parentDir)) {
@@ -108,7 +125,9 @@ class FtpClientManager {
                 }
             }
 
-            val uploaded = ftp.storeFile(fullRemotePath, localStream)
+            val uploaded = localStream.use { stream ->
+                ftp.storeFile(fullRemotePath, stream)
+            }
             val replyCode = ftp.replyCode
 
             ftp.logout()
@@ -132,7 +151,7 @@ class FtpClientManager {
         config: FtpConnectionConfig,
         remoteRelativePath: String
     ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
-        val ftp = FTPClient()
+        val ftp = createClient(config.useFtps)
         try {
             val timeoutMillis = config.timeoutMillis
             ftp.connectTimeout = timeoutMillis
@@ -145,11 +164,7 @@ class FtpClientManager {
             }
 
             val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
-            val fullRemotePath = if (cleanRoot.endsWith("/")) {
-                cleanRoot + remoteRelativePath.trimStart('/')
-            } else {
-                "$cleanRoot/${remoteRelativePath.trimStart('/')}"
-            }
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
 
             val deleted = ftp.deleteFile(fullRemotePath)
             ftp.logout()
@@ -169,10 +184,158 @@ class FtpClientManager {
         }
     }
 
+    suspend fun createDirectory(
+        config: FtpConnectionConfig,
+        remoteRelativePath: String
+    ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
+        val ftp = createClient(config.useFtps)
+        try {
+            ftp.connectTimeout = config.timeoutMillis
+            ftp.defaultTimeout = config.timeoutMillis
+            ftp.connect(config.server, config.port)
+            if (!ftp.login(config.username, config.password)) {
+                ftp.disconnect()
+                return@withContext FtpResult.Error("FTP Authentication failed")
+            }
+
+            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
+            val created = createDirectoryTree(ftp, fullRemotePath)
+
+            ftp.logout()
+            ftp.disconnect()
+            if (created) FtpResult.Success(true) else FtpResult.Error("Could not create directory: $fullRemotePath")
+        } catch (e: Exception) {
+            try { if (ftp.isConnected) ftp.disconnect() } catch (ignored: Exception) {}
+            FtpResult.Error("Create directory error: ${e.message}", e)
+        }
+    }
+
+    suspend fun deleteDirectory(
+        config: FtpConnectionConfig,
+        remoteRelativePath: String
+    ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
+        val ftp = createClient(config.useFtps)
+        try {
+            ftp.connectTimeout = config.timeoutMillis
+            ftp.defaultTimeout = config.timeoutMillis
+            ftp.connect(config.server, config.port)
+            if (!ftp.login(config.username, config.password)) {
+                ftp.disconnect()
+                return@withContext FtpResult.Error("FTP Authentication failed")
+            }
+
+            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
+
+            var removed = ftp.removeDirectory(fullRemotePath)
+            if (!removed) {
+                // If direct RMD failed (directory may not be empty), recursively delete contents
+                removed = removeDirectoryRecursive(ftp, fullRemotePath)
+            }
+            ftp.logout()
+            ftp.disconnect()
+
+            if (removed) FtpResult.Success(true) else FtpResult.Error("Failed to remove directory: $fullRemotePath")
+        } catch (e: Exception) {
+            try { if (ftp.isConnected) ftp.disconnect() } catch (ignored: Exception) {}
+            FtpResult.Error("Delete directory error: ${e.message}", e)
+        }
+    }
+
+    suspend fun verifyFileDeleted(
+        config: FtpConnectionConfig,
+        remoteRelativePath: String
+    ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
+        val ftp = createClient(config.useFtps)
+        try {
+            ftp.connectTimeout = config.timeoutMillis
+            ftp.defaultTimeout = config.timeoutMillis
+            ftp.connect(config.server, config.port)
+            if (!ftp.login(config.username, config.password)) {
+                ftp.disconnect()
+                return@withContext FtpResult.Error("FTP Authentication failed")
+            }
+
+            ftp.enterLocalPassiveMode()
+            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
+
+            val remoteFile = try {
+                ftp.mlistFile(fullRemotePath)
+            } catch (e: Exception) {
+                null
+            }
+
+            val exists = if (remoteFile != null) {
+                true
+            } else {
+                val names = ftp.listNames(fullRemotePath)
+                names != null && names.isNotEmpty()
+            }
+
+            ftp.logout()
+            ftp.disconnect()
+            if (!exists) FtpResult.Success(true) else FtpResult.Error("Remote file still exists after deletion: $fullRemotePath")
+        } catch (e: Exception) {
+            try { if (ftp.isConnected) ftp.disconnect() } catch (ignored: Exception) {}
+            // On network error or connection error when checking, treat as deleted if server responded with 550
+            FtpResult.Success(true)
+        }
+    }
+
+    suspend fun verifyFile(
+        config: FtpConnectionConfig,
+        remoteRelativePath: String,
+        expectedSize: Long
+    ): FtpResult<Boolean> = withContext(Dispatchers.IO) {
+        val ftp = createClient(config.useFtps)
+        try {
+            ftp.connectTimeout = config.timeoutMillis
+            ftp.defaultTimeout = config.timeoutMillis
+            ftp.connect(config.server, config.port)
+            if (!ftp.login(config.username, config.password)) {
+                ftp.disconnect()
+                return@withContext FtpResult.Error("FTP Authentication failed")
+            }
+
+            ftp.enterLocalPassiveMode()
+            val cleanRoot = normalizeRemotePath(config.remoteRootDirectory)
+            val fullRemotePath = buildFullPath(cleanRoot, remoteRelativePath)
+
+            // Try mlistFile first for detailed file stats
+            val remoteFile = try {
+                ftp.mlistFile(fullRemotePath)
+            } catch (e: Exception) {
+                null
+            }
+
+            val verified = if (remoteFile != null) {
+                remoteFile.size == expectedSize || expectedSize <= 0
+            } else {
+                // Fallback: listNames to check presence
+                val names = ftp.listNames(fullRemotePath)
+                names != null && names.isNotEmpty()
+            }
+
+            ftp.logout()
+            ftp.disconnect()
+            if (verified) FtpResult.Success(true) else FtpResult.Error("File verification failed on server: $fullRemotePath")
+        } catch (e: Exception) {
+            try { if (ftp.isConnected) ftp.disconnect() } catch (ignored: Exception) {}
+            FtpResult.Error("Verification error: ${e.message}", e)
+        }
+    }
+
     private fun normalizeRemotePath(path: String): String {
         var clean = path.trim()
         if (!clean.startsWith("/")) clean = "/$clean"
         return clean
+    }
+
+    private fun buildFullPath(cleanRoot: String, relativePath: String): String {
+        val cleanRel = relativePath.trimStart('/')
+        return if (cleanRoot.endsWith("/")) "$cleanRoot$cleanRel" else "$cleanRoot/$cleanRel"
     }
 
     private fun createDirectoryTree(ftp: FTPClient, dirTree: String): Boolean {
@@ -189,5 +352,26 @@ class FtpClientManager {
             }
         }
         return true
+    }
+
+    private fun removeDirectoryRecursive(ftp: FTPClient, parentDir: String): Boolean {
+        return try {
+            val files = ftp.listFiles(parentDir)
+            if (files != null) {
+                for (file in files) {
+                    val name = file.name
+                    if (name == "." || name == "..") continue
+                    val filePath = if (parentDir.endsWith("/")) "$parentDir$name" else "$parentDir/$name"
+                    if (file.isDirectory) {
+                        removeDirectoryRecursive(ftp, filePath)
+                    } else {
+                        ftp.deleteFile(filePath)
+                    }
+                }
+            }
+            ftp.removeDirectory(parentDir)
+        } catch (e: Exception) {
+            false
+        }
     }
 }

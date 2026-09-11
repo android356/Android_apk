@@ -3,11 +3,9 @@ package com.autodeploy.infinityfree.service
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import com.autodeploy.infinityfree.data.ftp.FtpClientManager
-import com.autodeploy.infinityfree.data.ftp.FtpConnectionConfig
-import com.autodeploy.infinityfree.data.ftp.FtpResult
-import com.autodeploy.infinityfree.data.github.GitHubClientManager
-import com.autodeploy.infinityfree.data.github.GitHubResult
+import com.autodeploy.infinityfree.data.deployment.DeploymentManager
+import com.autodeploy.infinityfree.data.deployment.DeploymentTargetType
+import com.autodeploy.infinityfree.data.deployment.ProviderResult
 import com.autodeploy.infinityfree.data.local.AppDatabase
 import com.autodeploy.infinityfree.data.local.entity.FileMetadataEntity
 import com.autodeploy.infinityfree.data.local.entity.SyncHistoryEntity
@@ -18,17 +16,14 @@ import com.autodeploy.infinityfree.data.security.SecureStorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.io.FileInputStream
-import java.io.InputStream
+import java.io.File
 
 class SyncQueueProcessor(
     private val context: Context,
     private val database: AppDatabase,
     private val preferences: AppPreferences,
     private val secureStorage: SecureStorageManager,
-    private val ftpManager: FtpClientManager,
-    private val githubManager: GitHubClientManager,
+    private val deploymentManager: DeploymentManager,
     private val backupManager: BackupManager
 ) {
     companion object {
@@ -39,9 +34,54 @@ class SyncQueueProcessor(
     private val queueDao = database.syncQueueDao()
     private val fileMetadataDao = database.fileMetadataDao()
     private val historyDao = database.syncHistoryDao()
-    private val connectionDao = database.hostingConnectionDao()
-    private val githubDao = database.githubConnectionDao()
     private val projectDao = database.projectDao()
+
+    private fun isNetworkAvailable(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return true
+        val activeNetwork = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun shouldWaitForBackoff(item: SyncQueueEntity): Boolean {
+        if (item.status != "RETRYING" || item.retryCount <= 0) return false
+        val lastAttempt = item.lastAttemptAt ?: return false
+        // Backoff: 2s * 2^(retryCount - 1), capped at 60s
+        val backoffDelay = (2000L * (1L shl (item.retryCount - 1).coerceAtMost(5))).coerceAtMost(60_000L)
+        return (System.currentTimeMillis() - lastAttempt) < backoffDelay
+    }
+
+    private fun sanitizeErrorMessage(raw: String?): String {
+        if (raw == null) return ""
+        var sanitized = raw
+        // Mask GitHub tokens
+        sanitized = sanitized.replace(Regex("""(ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,})"""), "[REDACTED_TOKEN]")
+        // Mask Bearer tokens
+        sanitized = sanitized.replace(Regex("""Bearer\s+[a-zA-Z0-9_\-\.]+""", RegexOption.IGNORE_CASE), "Bearer [REDACTED]")
+        // Mask passwords in URLs or logs
+        sanitized = sanitized.replace(Regex("""(:)[^:/@\s]+(@)"""), "$1[REDACTED]$2")
+        sanitized = sanitized.replace(Regex("""password\s*=\s*['"]?[^\s,;&'"]+['"]?""", RegexOption.IGNORE_CASE), "password=[REDACTED]")
+        return sanitized
+    }
+
+    private fun categorizeError(msg: String?): String {
+        if (msg == null) return "UNKNOWN"
+        val lower = msg.lowercase()
+        return when {
+            lower.contains("timeout") || lower.contains("connect") || lower.contains("network") ||
+                lower.contains("socket") || lower.contains("unreachable") || lower.contains("resolve") -> "NETWORK"
+            lower.contains("auth") || lower.contains("login") || lower.contains("password") ||
+                lower.contains("credentials") || lower.contains("401") || lower.contains("403") ||
+                lower.contains("token") || lower.contains("unauthorized") -> "AUTH"
+            lower.contains("quota") || lower.contains("disk full") || lower.contains("space") ||
+                lower.contains("552") || lower.contains("storage") -> "STORAGE_FULL"
+            lower.contains("permission") || lower.contains("denied") -> "PERMISSION"
+            lower.contains("not found") || lower.contains("404") || lower.contains("550") -> "NOT_FOUND"
+            lower.contains("hash") || lower.contains("integrity") || lower.contains("checksum") ||
+                lower.contains("mismatch") -> "INTEGRITY"
+            else -> "GENERAL"
+        }
+    }
 
     suspend fun processPendingQueue(
         onActivityUpdate: (String) -> Unit = {}
@@ -51,9 +91,16 @@ class SyncQueueProcessor(
         val pendingItems = queueDao.getPendingItems(project.id)
         if (pendingItems.isEmpty()) return@withContext 0
 
+        if (!isNetworkAvailable()) {
+            Log.d(TAG, "Network unavailable, skipping queue processing")
+            onActivityUpdate("Waiting for network connection...")
+            return@withContext 0
+        }
+
+        val activeTarget = deploymentManager.getActiveTarget()
         var processedCount = 0
 
-        for (item in pendingItems) {
+        for (rawItem in pendingItems) {
             // Check Emergency Stop or Pause State before each item
             val controlState = preferences.syncControlState.first()
             if (controlState == SyncControlState.EMERGENCY_STOPPED || controlState == SyncControlState.PAUSED) {
@@ -62,21 +109,36 @@ class SyncQueueProcessor(
                 break
             }
 
+            // Exponential backoff cooldown check
+            if (shouldWaitForBackoff(rawItem)) {
+                Log.d(TAG, "Skipping ${rawItem.relativePath} (in backoff cooldown)")
+                continue
+            }
+
+            // Ensure single active target binding
+            val item = if (rawItem.targetProvider != activeTarget.name) {
+                val rebound = rawItem.copy(targetProvider = activeTarget.name, target = activeTarget.name)
+                queueDao.updateItem(rebound)
+                rebound
+            } else {
+                rawItem
+            }
+
             val startTime = System.currentTimeMillis()
             queueDao.updateStatus(item.id, "UPLOADING")
             onActivityUpdate("Processing ${item.relativePath}...")
 
             when (item.operation) {
                 "UPLOAD" -> {
-                    handleUploadOperation(project.id, item, startTime, onActivityUpdate)
+                    handleUploadOperation(project.id, item, startTime, activeTarget, onActivityUpdate)
                     processedCount++
                 }
                 "DELETE_FILE" -> {
-                    handleDeleteOperation(project.id, item, startTime, onActivityUpdate)
+                    handleDeleteOperation(project.id, item, startTime, activeTarget, onActivityUpdate)
                     processedCount++
                 }
                 "ROLLBACK" -> {
-                    handleRollbackOperation(project.id, item, startTime, onActivityUpdate)
+                    handleRollbackOperation(project.id, item, startTime, activeTarget, onActivityUpdate)
                     processedCount++
                 }
                 else -> {
@@ -96,8 +158,17 @@ class SyncQueueProcessor(
         projectId: Long,
         item: SyncQueueEntity,
         startTime: Long,
+        targetType: DeploymentTargetType,
         onActivityUpdate: (String) -> Unit
     ) {
+        val provider = deploymentManager.getProvider(targetType)
+
+        if (!provider.isConfigured(projectId)) {
+            val errorMsg = "${provider.displayName} is not configured"
+            failOrRetry(item, errorMsg, projectId, "UPLOAD", startTime, targetType)
+            return
+        }
+
         val metadata = fileMetadataDao.getByPath(projectId, item.relativePath)
         val fileUri = Uri.parse(metadata?.optionalHash ?: "")
 
@@ -111,152 +182,103 @@ class SyncQueueProcessor(
 
         if (fileBytes == null) {
             val errorMsg = "Local file stream unavailable"
-            failOrRetry(item, errorMsg, projectId, "UPLOAD", startTime, "FAILED", "FAILED")
+            failOrRetry(item, errorMsg, projectId, "UPLOAD", startTime, targetType)
             return
         }
 
         // 1. Temporary Backup before overwriting modified file
-        if (metadata != null && (metadata.lastSyncedAt != null || metadata.githubLastSyncedAt != null)) {
+        if (metadata != null && metadata.lastSyncedAt != null) {
             val retention = preferences.backupRetentionMinutes.first()
             if (fileUri != null && fileUri.toString().isNotEmpty()) {
                 backupManager.createBackupBeforeReplace(projectId, item.relativePath, fileUri, retention)
             }
         }
 
-        var githubSuccess = true
-        var githubResultMsg = "SKIPPED"
-        var returnedSha: String? = metadata?.githubSha
+        // 2. Deploy EXCLUSIVELY to the active target provider
+        onActivityUpdate("Deploying to ${provider.displayName}: ${item.relativePath}")
+        val uploadResult = provider.uploadFile(
+            projectId = projectId,
+            localStream = fileBytes.inputStream(),
+            relativePath = item.relativePath,
+            fileSize = fileBytes.size.toLong()
+        )
 
-        // 2. GitHub Synchronization
-        val githubConn = githubDao.getConnectionForProject(projectId)
-        if (githubConn != null) {
-            val token = secureStorage.getGitHubToken(githubConn.encryptedTokenReference)
-            if (!token.isNullOrEmpty()) {
-                onActivityUpdate("Syncing to GitHub: ${item.relativePath}")
-                val destPath = buildGitHubPath(githubConn.destinationPath, item.relativePath)
+        when (uploadResult) {
+            is ProviderResult.Success -> {
+                // Explicit transition: VERIFYING -> SUCCESS
+                queueDao.updateStatus(item.id, "VERIFYING")
+                onActivityUpdate("Verifying ${item.relativePath} on ${provider.displayName}...")
 
-                // Conflict Detection: check if remote SHA has changed unexpectedly
-                val remoteSha = githubManager.getFileSha(githubConn.owner, githubConn.repo, githubConn.branch, destPath, token)
-                if (remoteSha != null && metadata?.githubSha != null && remoteSha != metadata.githubSha) {
-                    // Remote was modified independently
-                    val conflictMsg = "Conflict: Remote file on GitHub was modified independently (SHA: ${remoteSha.take(7)} != ${metadata.githubSha?.take(7)})"
-                    queueDao.markConflict(item.id, conflictMsg)
-                    historyDao.insert(
-                        SyncHistoryEntity(
-                            projectId = projectId,
-                            operation = "UPLOAD",
-                            relativePath = item.relativePath,
-                            startedAt = startTime,
-                            completedAt = System.currentTimeMillis(),
-                            result = "CONFLICT",
-                            githubResult = "CONFLICT",
-                            infinityFreeResult = "SKIPPED",
-                            errorMessage = conflictMsg
-                        )
+                val verification = uploadResult.data
+                val isVerified = verification.verified
+                val remoteSha = verification.remoteSha
+                val now = System.currentTimeMillis()
+                val duration = now - startTime
+
+                queueDao.updateItem(
+                    item.copy(
+                        status = "SUCCESS",
+                        verified = isVerified,
+                        githubSha = remoteSha,
+                        githubStatus = if (targetType == DeploymentTargetType.GITHUB) "SUCCESS" else "SKIPPED",
+                        infinityFreeStatus = if (targetType == DeploymentTargetType.INFINITY_FREE) "SUCCESS" else "SKIPPED",
+                        errorMessage = null,
+                        lastAttemptAt = now
                     )
-                    return
-                }
-
-                val commitMsg = "Auto-deploy: update ${item.relativePath}"
-                val ghResult = githubManager.uploadOrUpdateFile(
-                    owner = githubConn.owner,
-                    repo = githubConn.repo,
-                    branch = githubConn.branch,
-                    filePath = destPath,
-                    fileBytes = fileBytes,
-                    commitMessage = commitMsg,
-                    existingSha = remoteSha ?: metadata?.githubSha,
-                    token = token
                 )
 
-                when (ghResult) {
-                    is GitHubResult.Success -> {
-                        githubSuccess = true
-                        githubResultMsg = "SUCCESS"
-                        returnedSha = ghResult.data
-                        preferences.setLastGitHubSyncTimestamp(System.currentTimeMillis())
-                    }
-                    is GitHubResult.Error -> {
-                        githubSuccess = false
-                        githubResultMsg = "FAILED: ${ghResult.message}"
-                    }
+                fileMetadataDao.insertOrUpdate(
+                    (metadata ?: FileMetadataEntity(
+                        projectId = projectId,
+                        relativePath = item.relativePath,
+                        itemType = "FILE",
+                        fileSize = fileBytes.size.toLong(),
+                        lastModified = now
+                    )).copy(
+                        fileSize = fileBytes.size.toLong(),
+                        lastSyncedAt = now,
+                        githubLastSyncedAt = if (targetType == DeploymentTargetType.GITHUB) now else metadata?.githubLastSyncedAt,
+                        infinityFreeLastSyncedAt = if (targetType == DeploymentTargetType.INFINITY_FREE) now else metadata?.infinityFreeLastSyncedAt,
+                        githubSha = remoteSha ?: metadata?.githubSha,
+                        syncStatus = "SYNCED",
+                        isPresent = true
+                    )
+                )
+
+                historyDao.insert(
+                    SyncHistoryEntity(
+                        projectId = projectId,
+                        operation = "UPLOAD",
+                        relativePath = item.relativePath,
+                        startedAt = startTime,
+                        completedAt = now,
+                        result = "SUCCESS",
+                        githubResult = if (targetType == DeploymentTargetType.GITHUB) "SUCCESS" else "SKIPPED",
+                        infinityFreeResult = if (targetType == DeploymentTargetType.INFINITY_FREE) "SUCCESS" else "SKIPPED",
+                        errorMessage = "${provider.displayName}: ${verification.message}",
+                        targetProvider = targetType.name,
+                        retryCount = item.retryCount,
+                        durationMs = duration,
+                        errorCategory = "NONE",
+                        verified = isVerified
+                    )
+                )
+
+                when (targetType) {
+                    DeploymentTargetType.INFINITY_FREE -> preferences.setLastInfinityFreeSyncTimestamp(now)
+                    DeploymentTargetType.SHROTI_HOST -> preferences.setLastShrotiHostSyncTimestamp(now)
+                    DeploymentTargetType.GITHUB -> preferences.setLastGitHubSyncTimestamp(now)
                 }
+                preferences.setLastSuccessfulSyncTimestamp(now)
             }
-        }
+            is ProviderResult.Error -> {
+                failOrRetry(item, uploadResult.message, projectId, "UPLOAD", startTime, targetType)
 
-        // 3. InfinityFree Hosting Synchronization
-        var ifSuccess = true
-        var ifResultMsg = "SKIPPED"
-
-        val ifConn = connectionDao.getConnectionForProject(projectId)
-        if (ifConn != null) {
-            val pass = secureStorage.getFtpPassword(ifConn.encryptedPasswordReference)
-            if (!pass.isNullOrEmpty()) {
-                onActivityUpdate("Uploading to InfinityFree: ${item.relativePath}")
-                val ftpConfig = FtpConnectionConfig(
-                    server = ifConn.server,
-                    port = ifConn.port,
-                    username = ifConn.username,
-                    password = pass,
-                    remoteRootDirectory = ifConn.remoteRootDirectory
-                )
-
-                val uploadResult = ftpManager.uploadFile(ftpConfig, fileBytes.inputStream(), item.relativePath)
-                when (uploadResult) {
-                    is FtpResult.Success -> {
-                        ifSuccess = true
-                        ifResultMsg = "SUCCESS"
-                        preferences.setLastInfinityFreeSyncTimestamp(System.currentTimeMillis())
-                    }
-                    is FtpResult.Error -> {
-                        ifSuccess = false
-                        ifResultMsg = "FAILED: ${uploadResult.message}"
-                    }
+                // Optional automatic rollback after deployment failure if enabled in preferences
+                if (preferences.isAutoRollbackEnabled.first()) {
+                    triggerAutoRollback(projectId, item, targetType)
                 }
             }
-        }
-
-        val allOk = githubSuccess && ifSuccess
-        val now = System.currentTimeMillis()
-
-        if (allOk) {
-            queueDao.updateStatus(item.id, "SUCCESS")
-            fileMetadataDao.insertOrUpdate(
-                (metadata ?: FileMetadataEntity(
-                    projectId = projectId,
-                    relativePath = item.relativePath,
-                    itemType = "FILE",
-                    fileSize = fileBytes.size.toLong(),
-                    lastModified = now
-                )).copy(
-                    fileSize = fileBytes.size.toLong(),
-                    lastSyncedAt = now,
-                    githubLastSyncedAt = if (githubConn != null) now else metadata?.githubLastSyncedAt,
-                    infinityFreeLastSyncedAt = if (ifConn != null) now else metadata?.infinityFreeLastSyncedAt,
-                    githubSha = returnedSha,
-                    syncStatus = "SYNCED",
-                    isPresent = true
-                )
-            )
-            historyDao.insert(
-                SyncHistoryEntity(
-                    projectId = projectId,
-                    operation = "UPLOAD",
-                    relativePath = item.relativePath,
-                    startedAt = startTime,
-                    completedAt = now,
-                    result = "SUCCESS",
-                    githubResult = githubResultMsg,
-                    infinityFreeResult = ifResultMsg
-                )
-            )
-            preferences.setLastSuccessfulSyncTimestamp(now)
-        } else {
-            val combinedError = buildString {
-                if (!githubSuccess) append("GitHub: $githubResultMsg; ")
-                if (!ifSuccess) append("InfinityFree: $ifResultMsg")
-            }
-            failOrRetry(item, combinedError, projectId, "UPLOAD", startTime, githubResultMsg, ifResultMsg)
         }
     }
 
@@ -264,69 +286,65 @@ class SyncQueueProcessor(
         projectId: Long,
         item: SyncQueueEntity,
         startTime: Long,
+        targetType: DeploymentTargetType,
         onActivityUpdate: (String) -> Unit
     ) {
-        var githubSuccess = true
-        var githubResultMsg = "SKIPPED"
+        val provider = deploymentManager.getProvider(targetType)
 
-        val githubConn = githubDao.getConnectionForProject(projectId)
-        if (githubConn != null) {
-            val token = secureStorage.getGitHubToken(githubConn.encryptedTokenReference)
-            if (!token.isNullOrEmpty()) {
-                val destPath = buildGitHubPath(githubConn.destinationPath, item.relativePath)
-                val sha = githubManager.getFileSha(githubConn.owner, githubConn.repo, githubConn.branch, destPath, token)
-                if (sha != null) {
-                    val delRes = githubManager.deleteFile(
-                        owner = githubConn.owner,
-                        repo = githubConn.repo,
-                        branch = githubConn.branch,
-                        filePath = destPath,
-                        commitMessage = "Auto-deploy: delete ${item.relativePath}",
-                        existingSha = sha,
-                        token = token
-                    )
-                    githubSuccess = delRes is GitHubResult.Success
-                    githubResultMsg = if (githubSuccess) "SUCCESS" else "FAILED"
+        if (!provider.isConfigured(projectId)) {
+            val errorMsg = "${provider.displayName} is not configured"
+            failOrRetry(item, errorMsg, projectId, "DELETE", startTime, targetType)
+            return
+        }
+
+        onActivityUpdate("Deleting from ${provider.displayName}: ${item.relativePath}")
+        val delResult = provider.deleteFile(projectId, item.relativePath)
+
+        when (delResult) {
+            is ProviderResult.Success -> {
+                queueDao.updateStatus(item.id, "VERIFYING")
+                onActivityUpdate("Verifying deletion on ${provider.displayName}: ${item.relativePath}")
+
+                val verifyResult = provider.verifyDeletion(projectId, item.relativePath)
+                val isVerified = when (verifyResult) {
+                    is ProviderResult.Success -> verifyResult.data
+                    is ProviderResult.Error -> false
                 }
-            }
-        }
 
-        var ifSuccess = true
-        var ifResultMsg = "SKIPPED"
+                val now = System.currentTimeMillis()
+                val duration = now - startTime
 
-        val ifConn = connectionDao.getConnectionForProject(projectId)
-        if (ifConn != null) {
-            val pass = secureStorage.getFtpPassword(ifConn.encryptedPasswordReference)
-            if (!pass.isNullOrEmpty()) {
-                val ftpConfig = FtpConnectionConfig(
-                    server = ifConn.server,
-                    port = ifConn.port,
-                    username = ifConn.username,
-                    password = pass,
-                    remoteRootDirectory = ifConn.remoteRootDirectory
+                queueDao.updateItem(
+                    item.copy(
+                        status = "SUCCESS",
+                        verified = isVerified,
+                        githubStatus = if (targetType == DeploymentTargetType.GITHUB) "SUCCESS" else "SKIPPED",
+                        infinityFreeStatus = if (targetType == DeploymentTargetType.INFINITY_FREE) "SUCCESS" else "SKIPPED",
+                        lastAttemptAt = now
+                    )
                 )
-                val res = ftpManager.deleteFile(ftpConfig, item.relativePath)
-                ifSuccess = res is FtpResult.Success
-                ifResultMsg = if (ifSuccess) "SUCCESS" else "FAILED"
-            }
-        }
-
-        if (githubSuccess && ifSuccess) {
-            queueDao.updateStatus(item.id, "SUCCESS")
-            historyDao.insert(
-                SyncHistoryEntity(
-                    projectId = projectId,
-                    operation = "DELETE",
-                    relativePath = item.relativePath,
-                    startedAt = startTime,
-                    completedAt = System.currentTimeMillis(),
-                    result = "SUCCESS",
-                    githubResult = githubResultMsg,
-                    infinityFreeResult = ifResultMsg
+                historyDao.insert(
+                    SyncHistoryEntity(
+                        projectId = projectId,
+                        operation = "DELETE",
+                        relativePath = item.relativePath,
+                        startedAt = startTime,
+                        completedAt = now,
+                        result = "SUCCESS",
+                        githubResult = if (targetType == DeploymentTargetType.GITHUB) "SUCCESS" else "SKIPPED",
+                        infinityFreeResult = if (targetType == DeploymentTargetType.INFINITY_FREE) "SUCCESS" else "SKIPPED",
+                        errorMessage = "${provider.displayName}: Deleted (Verified: $isVerified)",
+                        targetProvider = targetType.name,
+                        retryCount = item.retryCount,
+                        durationMs = duration,
+                        errorCategory = "NONE",
+                        verified = isVerified
+                    )
                 )
-            )
-        } else {
-            failOrRetry(item, "Deletion failed", projectId, "DELETE", startTime, githubResultMsg, ifResultMsg)
+            }
+            is ProviderResult.Error -> {
+                failOrRetry(item, delResult.message, projectId, "DELETE", startTime, targetType)
+            }
         }
     }
 
@@ -334,129 +352,207 @@ class SyncQueueProcessor(
         projectId: Long,
         item: SyncQueueEntity,
         startTime: Long,
+        targetType: DeploymentTargetType,
         onActivityUpdate: (String) -> Unit
     ) {
+        val provider = deploymentManager.getProvider(targetType)
+
         val backups = database.temporaryBackupDao().getAvailableBackups(projectId)
-        val backup = backups.firstOrNull { it.relativePath == item.relativePath }
+        val backup = if (item.backupId != null) {
+            database.temporaryBackupDao().getBackupById(item.backupId)
+        } else {
+            backups.firstOrNull { it.relativePath == item.relativePath }
+        }
+
         if (backup == null) {
-            queueDao.updateStatus(item.id, "FAILED", "Backup file expired or missing")
+            val err = "Backup record expired or missing"
+            queueDao.updateStatus(item.id, "FAILED", err)
+            val now = System.currentTimeMillis()
+            historyDao.insert(
+                SyncHistoryEntity(
+                    projectId = projectId,
+                    operation = "ROLLBACK",
+                    relativePath = item.relativePath,
+                    startedAt = startTime,
+                    completedAt = now,
+                    result = "FAILED",
+                    errorMessage = err,
+                    targetProvider = targetType.name,
+                    retryCount = item.retryCount,
+                    durationMs = now - startTime,
+                    errorCategory = "NOT_FOUND",
+                    verified = false
+                )
+            )
             return
         }
 
         val backupFile = backupManager.getBackupFile(backup)
         if (backupFile == null || !backupFile.exists()) {
-            queueDao.updateStatus(item.id, "FAILED", "Backup file not found on disk")
+            val err = "Backup file not found on disk"
+            queueDao.updateStatus(item.id, "FAILED", err)
+            val now = System.currentTimeMillis()
+            historyDao.insert(
+                SyncHistoryEntity(
+                    projectId = projectId,
+                    operation = "ROLLBACK",
+                    relativePath = item.relativePath,
+                    startedAt = startTime,
+                    completedAt = now,
+                    result = "FAILED",
+                    errorMessage = err,
+                    targetProvider = targetType.name,
+                    retryCount = item.retryCount,
+                    durationMs = now - startTime,
+                    errorCategory = "NOT_FOUND",
+                    verified = false
+                )
+            )
             return
         }
 
         val bytes = backupFile.readBytes()
+        onActivityUpdate("Rolling back on ${provider.displayName}: ${item.relativePath}")
+        val res = provider.uploadFile(projectId, bytes.inputStream(), item.relativePath, bytes.size.toLong())
 
-        // Upload restored backup to GitHub and InfinityFree
-        val githubConn = githubDao.getConnectionForProject(projectId)
-        if (githubConn != null) {
-            val token = secureStorage.getGitHubToken(githubConn.encryptedTokenReference)
-            if (!token.isNullOrEmpty()) {
-                val destPath = buildGitHubPath(githubConn.destinationPath, item.relativePath)
-                val sha = githubManager.getFileSha(githubConn.owner, githubConn.repo, githubConn.branch, destPath, token)
-                githubManager.uploadOrUpdateFile(
-                    githubConn.owner,
-                    githubConn.repo,
-                    githubConn.branch,
-                    destPath,
-                    bytes,
-                    "Rollback ${item.relativePath} to ${backup.versionIdentifier}",
-                    sha,
-                    token
+        val now = System.currentTimeMillis()
+        val duration = now - startTime
+
+        when (res) {
+            is ProviderResult.Success -> {
+                val isVerified = res.data.verified
+                queueDao.updateItem(
+                    item.copy(
+                        status = "ROLLED_BACK",
+                        verified = isVerified,
+                        lastAttemptAt = now
+                    )
+                )
+                historyDao.insert(
+                    SyncHistoryEntity(
+                        projectId = projectId,
+                        operation = "ROLLBACK",
+                        relativePath = item.relativePath,
+                        startedAt = startTime,
+                        completedAt = now,
+                        result = "SUCCESS",
+                        errorMessage = "Rollback deployed to ${provider.displayName} (${backup.versionIdentifier})",
+                        targetProvider = targetType.name,
+                        retryCount = item.retryCount,
+                        durationMs = duration,
+                        errorCategory = "NONE",
+                        rollbackInfo = backup.versionIdentifier,
+                        verified = isVerified
+                    )
+                )
+            }
+            is ProviderResult.Error -> {
+                val sanitized = sanitizeErrorMessage(res.message)
+                queueDao.updateStatus(item.id, "FAILED", "Rollback failed on ${provider.displayName}: $sanitized")
+                historyDao.insert(
+                    SyncHistoryEntity(
+                        projectId = projectId,
+                        operation = "ROLLBACK",
+                        relativePath = item.relativePath,
+                        startedAt = startTime,
+                        completedAt = now,
+                        result = "FAILED",
+                        errorMessage = "Rollback failed on ${provider.displayName}: $sanitized",
+                        targetProvider = targetType.name,
+                        retryCount = item.retryCount,
+                        durationMs = duration,
+                        errorCategory = categorizeError(res.message),
+                        rollbackInfo = backup.versionIdentifier,
+                        verified = false
+                    )
                 )
             }
         }
-
-        val ifConn = connectionDao.getConnectionForProject(projectId)
-        if (ifConn != null) {
-            val pass = secureStorage.getFtpPassword(ifConn.encryptedPasswordReference)
-            if (!pass.isNullOrEmpty()) {
-                val ftpConfig = FtpConnectionConfig(
-                    server = ifConn.server,
-                    port = ifConn.port,
-                    username = ifConn.username,
-                    password = pass,
-                    remoteRootDirectory = ifConn.remoteRootDirectory
-                )
-                ftpManager.uploadFile(ftpConfig, bytes.inputStream(), item.relativePath)
-            }
-        }
-
-        queueDao.updateStatus(item.id, "SUCCESS")
-        historyDao.insert(
-            SyncHistoryEntity(
-                projectId = projectId,
-                operation = "ROLLBACK",
-                relativePath = item.relativePath,
-                startedAt = startTime,
-                completedAt = System.currentTimeMillis(),
-                result = "SUCCESS"
-            )
-        )
     }
 
     private suspend fun failOrRetry(
         item: SyncQueueEntity,
-        errorMessage: String,
+        rawErrorMessage: String,
         projectId: Long,
         operation: String,
         startTime: Long,
-        ghResult: String,
-        ifResult: String
+        targetType: DeploymentTargetType
     ) {
+        val sanitizedError = sanitizeErrorMessage(rawErrorMessage)
+        val errorCat = categorizeError(rawErrorMessage)
         val nextRetry = item.retryCount + 1
-        if (nextRetry < MAX_RETRIES) {
-            val updated = item.copy(
+        val isRetrying = nextRetry < MAX_RETRIES
+        val newStatus = if (isRetrying) "RETRYING" else "FAILED"
+        val now = System.currentTimeMillis()
+        val duration = now - startTime
+
+        val updated = item.copy(
+            retryCount = nextRetry,
+            status = newStatus,
+            errorMessage = sanitizedError,
+            lastAttemptAt = now
+        )
+        queueDao.updateItem(updated)
+        historyDao.insert(
+            SyncHistoryEntity(
+                projectId = projectId,
+                operation = operation,
+                relativePath = item.relativePath,
+                startedAt = startTime,
+                completedAt = now,
+                result = "FAILED",
+                githubResult = if (targetType == DeploymentTargetType.GITHUB) "FAILED" else "SKIPPED",
+                infinityFreeResult = if (targetType == DeploymentTargetType.INFINITY_FREE) "FAILED" else "SKIPPED",
+                errorMessage = if (isRetrying) {
+                    "Attempt $nextRetry/$MAX_RETRIES failed on ${targetType.name}: $sanitizedError"
+                } else {
+                    "Exceeded max retries ($MAX_RETRIES) on ${targetType.name}: $sanitizedError"
+                },
+                targetProvider = targetType.name,
                 retryCount = nextRetry,
-                status = "RETRYING",
-                errorMessage = errorMessage,
-                lastAttemptAt = System.currentTimeMillis()
+                durationMs = duration,
+                errorCategory = errorCat,
+                verified = false
             )
-            queueDao.updateItem(updated)
-            historyDao.insert(
-                SyncHistoryEntity(
+        )
+    }
+
+    private suspend fun triggerAutoRollback(
+        projectId: Long,
+        failedItem: SyncQueueEntity,
+        targetType: DeploymentTargetType
+    ) {
+        // Infinite Loop Prevention: Never auto-rollback an operation that was already a ROLLBACK
+        if (failedItem.operation == "ROLLBACK") {
+            Log.w(TAG, "Prevented infinite rollback loop: item ${failedItem.relativePath} is already a ROLLBACK operation.")
+            return
+        }
+
+        // Avoid duplicate active rollback queue entries
+        val activeItem = queueDao.getActiveItemByPath(projectId, failedItem.relativePath)
+        if (activeItem != null && activeItem.operation == "ROLLBACK") {
+            Log.d(TAG, "Rollback already active for ${failedItem.relativePath}, skipping duplicate trigger")
+            return
+        }
+
+        val backups = database.temporaryBackupDao().getAvailableBackups(projectId)
+        val backup = backups.firstOrNull { it.relativePath == failedItem.relativePath }
+        if (backup != null) {
+            Log.i(TAG, "Triggering automatic rollback for ${failedItem.relativePath} after failure on target ${targetType.name}")
+            queueDao.insertItem(
+                SyncQueueEntity(
                     projectId = projectId,
-                    operation = operation,
-                    relativePath = item.relativePath,
-                    startedAt = startTime,
-                    completedAt = System.currentTimeMillis(),
-                    result = "FAILED",
-                    githubResult = ghResult,
-                    infinityFreeResult = ifResult,
-                    errorMessage = "Attempt $nextRetry/$MAX_RETRIES failed: $errorMessage"
+                    relativePath = failedItem.relativePath,
+                    operation = "ROLLBACK",
+                    status = "PENDING",
+                    target = targetType.name,
+                    targetProvider = targetType.name,
+                    backupId = backup.id
                 )
             )
         } else {
-            val failed = item.copy(
-                retryCount = nextRetry,
-                status = "FAILED",
-                errorMessage = errorMessage,
-                lastAttemptAt = System.currentTimeMillis()
-            )
-            queueDao.updateItem(failed)
-            historyDao.insert(
-                SyncHistoryEntity(
-                    projectId = projectId,
-                    operation = operation,
-                    relativePath = item.relativePath,
-                    startedAt = startTime,
-                    completedAt = System.currentTimeMillis(),
-                    result = "FAILED",
-                    githubResult = ghResult,
-                    infinityFreeResult = ifResult,
-                    errorMessage = "Exceeded max retries ($MAX_RETRIES): $errorMessage"
-                )
-            )
+            Log.w(TAG, "No backup found to auto-rollback for ${failedItem.relativePath}")
         }
     }
-
-    private fun buildGitHubPath(destRoot: String, relativePath: String): String {
-        val cleanRoot = destRoot.trim().trimStart('/').trimEnd('/')
-        val cleanRel = relativePath.trimStart('/')
-        return if (cleanRoot.isEmpty()) cleanRel else "$cleanRoot/$cleanRel"
-    }
 }
+

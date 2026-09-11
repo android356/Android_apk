@@ -26,9 +26,11 @@ class AppRepository(
     val projectDao = database.projectDao()
     val githubConnectionDao = database.githubConnectionDao()
     val connectionDao = database.hostingConnectionDao()
+    val shrotiHostConnectionDao = database.shrotiHostConnectionDao()
     val fileMetadataDao = database.fileMetadataDao()
     val syncQueueDao = database.syncQueueDao()
     val backupDao = database.temporaryBackupDao()
+    val backupSnapshotDao = database.backupSnapshotDao()
     val historyDao = database.syncHistoryDao()
 
     fun observeActiveProject(): Flow<ProjectEntity?> = projectDao.observeActiveProject()
@@ -181,6 +183,104 @@ class AppRepository(
         )
         return ftpManager.testConnection(config)
     }
+
+    // ShrotiHost cPanel Connection
+    fun observeShrotiHostConnection(projectId: Long): Flow<ShrotiHostConnectionEntity?> =
+        shrotiHostConnectionDao.observeConnectionForProject(projectId)
+
+    suspend fun getShrotiHostConnection(projectId: Long): ShrotiHostConnectionEntity? =
+        shrotiHostConnectionDao.getConnectionForProject(projectId)
+
+    suspend fun saveShrotiHostConnection(
+        projectId: Long,
+        connectionName: String,
+        server: String,
+        port: Int,
+        username: String,
+        password: String,
+        remoteRoot: String,
+        useFtps: Boolean
+    ): Long = withContext(Dispatchers.IO) {
+        val passwordKey = "shrotihost_pass_proj_$projectId"
+        secureStorage.saveShrotiHostPassword(passwordKey, password)
+
+        val existing = shrotiHostConnectionDao.getConnectionForProject(projectId)
+        val normalizedRoot = if (remoteRoot.endsWith("/")) remoteRoot else "$remoteRoot/"
+
+        if (existing != null) {
+            val updated = existing.copy(
+                connectionName = connectionName,
+                server = server.trim(),
+                port = port,
+                username = username.trim(),
+                encryptedPasswordReference = passwordKey,
+                remoteRootDirectory = normalizedRoot,
+                useFtps = useFtps,
+                updatedAt = System.currentTimeMillis()
+            )
+            shrotiHostConnectionDao.updateConnection(updated)
+            existing.id
+        } else {
+            val newConn = ShrotiHostConnectionEntity(
+                projectId = projectId,
+                connectionName = connectionName,
+                server = server.trim(),
+                port = port,
+                username = username.trim(),
+                encryptedPasswordReference = passwordKey,
+                remoteRootDirectory = normalizedRoot,
+                useFtps = useFtps
+            )
+            shrotiHostConnectionDao.insertConnection(newConn)
+        }
+    }
+
+    fun getStoredShrotiHostPassword(keyReference: String): String? {
+        return secureStorage.getShrotiHostPassword(keyReference)
+    }
+
+    suspend fun testShrotiHostConnection(
+        server: String,
+        port: Int,
+        username: String,
+        password: String,
+        remoteRootDirectory: String,
+        useFtps: Boolean
+    ): FtpResult<String> {
+        val config = FtpConnectionConfig(
+            server = server.trim(),
+            port = port,
+            username = username.trim(),
+            password = password,
+            remoteRootDirectory = remoteRootDirectory,
+            useFtps = useFtps,
+            timeoutMillis = 20000
+        )
+        return ftpManager.testConnection(config)
+    }
+
+    // Versioned Backup Snapshots
+    fun observeSnapshots(projectId: Long): Flow<List<BackupSnapshotEntity>> =
+        backupSnapshotDao.observeSnapshots(projectId)
+
+    fun observeSnapshotCount(projectId: Long): Flow<Int> =
+        backupSnapshotDao.observeSnapshotCount(projectId)
+
+    fun observeStableCount(projectId: Long): Flow<Int> =
+        backupSnapshotDao.observeStableCount(projectId)
+
+    suspend fun getSnapshots(projectId: Long): List<BackupSnapshotEntity> =
+        backupSnapshotDao.getSnapshots(projectId)
+
+    suspend fun getSnapshotById(id: Long): BackupSnapshotEntity? =
+        backupSnapshotDao.getSnapshotById(id)
+
+    suspend fun setSnapshotStable(id: Long, isStable: Boolean) =
+        backupSnapshotDao.setStable(id, isStable)
+
+    suspend fun deleteSnapshot(id: Long) =
+        backupSnapshotDao.deleteSnapshot(id)
+
 
     // Counts & Observations
     fun observeFileCount(projectId: Long): Flow<Int> = fileMetadataDao.observeFileCount(projectId)

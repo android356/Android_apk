@@ -26,6 +26,8 @@ data class SyncQueueEntity(
     val status: String = "PENDING", // PENDING, PREPARING, UPLOADING, SUCCESS, FAILED, RETRYING, CANCELLED, CONFLICT
     @ColumnInfo(name = "target")
     val target: String = "ALL", // ALL, GITHUB, INFINITYFREE
+    @ColumnInfo(name = "target_provider", defaultValue = "INFINITY_FREE")
+    val targetProvider: String = "INFINITY_FREE", // INFINITY_FREE, SHROTI_HOST, GITHUB
     @ColumnInfo(name = "github_status")
     val githubStatus: String = "PENDING", // PENDING, SUCCESS, FAILED, SKIPPED, CONFLICT
     @ColumnInfo(name = "infinityfree_status")
@@ -41,5 +43,9 @@ data class SyncQueueEntity(
     @ColumnInfo(name = "last_attempt_at")
     val lastAttemptAt: Long? = null,
     @ColumnInfo(name = "error_message")
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    @ColumnInfo(name = "backup_id")
+    val backupId: Long? = null,
+    @ColumnInfo(name = "verified", defaultValue = "0")
+    val verified: Boolean = false
 )
